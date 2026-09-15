@@ -5,7 +5,9 @@ const bodyParser = require('body-parser');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const https = require('https');
+const http = require('http');
 const path = require('path');
+const { Server } = require('socket.io');
 const db = require('./db');
 const { analyzeRepo } = require('./analyzer');
 
@@ -16,6 +18,28 @@ const JWT_SECRET = process.env.JWT_SECRET || 'change-this-secret-in-production';
 app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+const httpServer = http.createServer(app);
+const io = new Server(httpServer, { cors: { origin: '*' } });
+
+// Все залогиненные клиенты сидят в одной комнате "board" — доска общая для всех.
+io.use((socket, next) => {
+  const token = socket.handshake.auth && socket.handshake.auth.token;
+  if (!token) return next(new Error('No token'));
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return next(new Error('Invalid token'));
+    socket.user = user;
+    next();
+  });
+});
+
+io.on('connection', (socket) => {
+  socket.join('board');
+});
+
+function broadcast(event, payload) {
+  io.to('board').emit(event, payload);
+}
 
 function authMiddleware(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -142,6 +166,7 @@ app.post('/api/tasks', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Task text is required' });
     }
     const task = await db.addTask(req.user.id, req.user.username, text.trim());
+    broadcast('task:created', task);
     res.json(task);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -158,6 +183,7 @@ app.put('/api/tasks/:id', authMiddleware, async (req, res) => {
     }
 
     const result = await db.updateTaskStatus(req.user.id, req.user.username, id, status);
+    broadcast('task:updated', result);
     res.json(result);
   } catch (err) {
     if (err.message === 'Task not found') {
@@ -171,6 +197,7 @@ app.delete('/api/tasks/:id', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
     await db.deleteTask(req.user.id, id);
+    broadcast('task:deleted', { id: Number(id) });
     res.json({ success: true });
   } catch (err) {
     if (err.message === 'Task not found') {
@@ -191,6 +218,7 @@ app.patch('/api/tasks/:id', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Task text is required' });
     }
     const result = await db.editTaskText(req.user.id, req.user.username, id, text.trim());
+    broadcast('task:edited', result);
     res.json(result);
   } catch (err) {
     if (err.message === 'Task not found') {
@@ -221,6 +249,7 @@ app.post('/api/tasks/:id/comments', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Comment text is required' });
     }
     const comment = await db.addComment(id, req.user.id, req.user.username, text.trim());
+    broadcast('comment:added', { task_id: Number(id), comment });
     res.json(comment);
   } catch (err) {
     if (err.message === 'Task not found') {
@@ -253,6 +282,8 @@ app.post('/api/sandbox/:id/promote', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
     const task = await db.promoteSandboxTask(req.user.id, req.user.username, id);
+    broadcast('task:created', task);
+    broadcast('sandbox:removed', { id: Number(id) });
     res.json(task);
   } catch (err) {
     if (err.message === 'Sandbox task not found') {
@@ -269,6 +300,7 @@ app.post('/api/sandbox/:id/dismiss', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
     await db.markSandboxStatus(id, 'dismissed');
+    broadcast('sandbox:removed', { id: Number(id) });
     res.json({ success: true });
   } catch (err) {
     if (err.message === 'Sandbox task not found') {
@@ -356,6 +388,7 @@ app.post('/api/settings/verify', authMiddleware, async (req, res) => {
 app.post('/api/analyze', authMiddleware, async (req, res) => {
   try {
     const result = await analyzeRepo();
+    if (result.added > 0) broadcast('sandbox:changed', result);
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -371,7 +404,7 @@ async function start() {
     await db.initDb();
     console.log('✅ Database initialized');
 
-    app.listen(PORT, () => {
+    httpServer.listen(PORT, () => {
       console.log(`🚀 Server running on http://localhost:${PORT}`);
     });
   } catch (err) {

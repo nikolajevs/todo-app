@@ -227,6 +227,7 @@
 
   </div>
 
+  <script src="/socket.io/socket.io.js"></script>
   <script>
     const API = '/api';
     let token = localStorage.getItem('todoToken');
@@ -235,7 +236,7 @@
     let isRegisterMode = false;
     let tasks = [];
     let sandbox = [];
-    let pollTimer = null;
+    let socket = null;
     let openHistory = {};
     let currentTab = 'board';
 
@@ -292,8 +293,50 @@
       token = null; username = null; userId = 0;
       localStorage.removeItem('todoToken'); localStorage.removeItem('todoUsername'); localStorage.removeItem('todoUserId');
       tasks = []; sandbox = [];
-      if (pollTimer) clearInterval(pollTimer);
+      if (socket) { socket.disconnect(); socket = null; }
       showAuth();
+    }
+
+    function connectSocket() {
+      if (socket) socket.disconnect();
+      socket = io({ auth: { token } });
+
+      // При (пере)подключении подтягиваем актуальное состояние —
+      // это подстраховка на случай пропущенных событий, а не опрос по таймеру.
+      socket.on('connect', () => { loadTasks(); loadSandbox(); });
+
+      socket.on('task:created', (task) => {
+        if (!tasks.some(t => t.id === task.id)) { tasks.unshift(task); renderPreservingFocus(); }
+      });
+
+      socket.on('task:updated', (result) => {
+        const t = tasks.find(x => x.id === result.id);
+        if (t) { t.status = result.status; t.worker_id = result.worker_id; t.worker_name = result.worker_name; renderPreservingFocus(); }
+      });
+
+      socket.on('task:edited', (result) => {
+        const t = tasks.find(x => x.id === result.id);
+        if (t) { t.text = result.text; if (openHistory[result.id]) loadHistory(result.id).then(renderPreservingFocus); else renderPreservingFocus(); }
+      });
+
+      socket.on('task:deleted', ({ id }) => {
+        if (tasks.some(t => t.id === id)) { tasks = tasks.filter(t => t.id !== id); renderPreservingFocus(); }
+      });
+
+      socket.on('comment:added', ({ task_id, comment }) => {
+        const t = tasks.find(x => x.id === task_id);
+        if (t) t.comment_count = (t.comment_count || 0) + 1;
+        if (openComments[task_id] && !openComments[task_id].some(c => c.id === comment.id)) {
+          openComments[task_id].push(comment);
+        }
+        renderPreservingFocus();
+      });
+
+      socket.on('sandbox:removed', ({ id }) => {
+        if (sandbox.some(s => s.id === id)) { sandbox = sandbox.filter(s => s.id !== id); renderSandbox(); }
+      });
+
+      socket.on('sandbox:changed', () => { loadSandbox(); });
     }
 
     function showApp() {
@@ -302,8 +345,7 @@
       document.getElementById('currentUser').textContent = username;
       loadTasks();
       loadSandbox();
-      if (pollTimer) clearInterval(pollTimer);
-      pollTimer = setInterval(() => { loadTasks(); loadSandbox(); }, 5000);
+      connectSocket();
     }
 
     function showAuth() {
@@ -422,7 +464,7 @@
         const res = await fetch(API + '/tasks', { headers: authHeaders() });
         if (res.status === 401 || res.status === 403) { logout(); return; }
         tasks = await res.json();
-        render();
+        renderPreservingFocus();
       } catch (err) { taskList.innerHTML = '<div class="empty-state">Failed to load tasks</div>'; }
     }
 
@@ -438,7 +480,7 @@
       if (!text) return;
       try {
         const res = await fetch(API + '/tasks', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ text }) });
-        if (res.ok) { const task = await res.json(); tasks.unshift(task); taskInput.value = ''; render(); }
+        if (res.ok) { const task = await res.json(); tasks.unshift(task); taskInput.value = ''; renderPreservingFocus(); }
       } catch (err) { alert('Failed to add task'); }
     }
 
@@ -448,7 +490,7 @@
         if (res.ok) {
           const result = await res.json();
           const task = tasks.find(t => t.id === id);
-          if (task) { task.status = result.status; task.worker_id = result.worker_id; task.worker_name = result.worker_name; if (openHistory[id]) await loadHistory(id); render(); }
+          if (task) { task.status = result.status; task.worker_id = result.worker_id; task.worker_name = result.worker_name; if (openHistory[id]) await loadHistory(id); renderPreservingFocus(); }
         }
       } catch (err) {}
     }
@@ -458,7 +500,7 @@
       if (el) el.classList.add('removing');
       try {
         const res = await fetch(API + '/tasks/' + id, { method: 'DELETE', headers: authHeaders() });
-        if (res.ok) { tasks = tasks.filter(t => t.id !== id); render(); }
+        if (res.ok) { tasks = tasks.filter(t => t.id !== id); renderPreservingFocus(); }
         else { if (el) el.classList.remove('removing'); const data = await res.json(); alert(data.error || 'Cannot delete'); }
       } catch (err) { if (el) el.classList.remove('removing'); }
     }
@@ -466,17 +508,17 @@
     async function loadHistory(id) {
       try { const res = await fetch(API + '/tasks/' + id + '/history', { headers: authHeaders() }); if (res.ok) openHistory[id] = await res.json(); } catch (err) {}
     }
-    async function toggleHistory(id) { if (openHistory[id]) delete openHistory[id]; else await loadHistory(id); render(); }
+    async function toggleHistory(id) { if (openHistory[id]) delete openHistory[id]; else await loadHistory(id); renderPreservingFocus(); }
 
     let editingId = null;
     function startEdit(id) {
       const task = tasks.find(t => t.id === id);
       const currentText = task ? task.text : '';
       editingId = id;
-      render();
+      renderPreservingFocus();
       setTimeout(() => { const el = document.getElementById('editInput-' + id); if (el) { el.focus(); el.value = currentText; } }, 0);
     }
-    function cancelEdit() { editingId = null; render(); }
+    function cancelEdit() { editingId = null; renderPreservingFocus(); }
     async function saveEdit(id) {
       const el = document.getElementById('editInput-' + id);
       const text = el ? el.value.trim() : '';
@@ -489,7 +531,7 @@
           if (task) task.text = result.text;
           editingId = null;
           if (openHistory[id]) await loadHistory(id);
-          render();
+          renderPreservingFocus();
         } else {
           const data = await res.json();
           alert(data.error || 'Не удалось сохранить');
@@ -504,7 +546,7 @@
     async function toggleComments(id) {
       if (openComments[id]) delete openComments[id];
       else await loadComments(id);
-      render();
+      renderPreservingFocus();
     }
     async function submitComment(id) {
       const el = document.getElementById('commentInput-' + id);
@@ -518,7 +560,7 @@
           openComments[id].push(comment);
           const task = tasks.find(t => t.id === id);
           if (task) task.comment_count = (task.comment_count || 0) + 1;
-          render();
+          renderPreservingFocus();
         }
       } catch (err) {}
     }
@@ -553,6 +595,26 @@
           <button class="comment-send" onclick="submitComment(${id})">Отправить</button>
         </div>
       </div>`;
+    }
+
+    function renderPreservingFocus() {
+      const active = document.activeElement;
+      let savedId = null, savedValue = null, savedStart = null, savedEnd = null;
+      if (active && active.id && (active.id.startsWith('commentInput-') || active.id.startsWith('editInput-'))) {
+        savedId = active.id;
+        savedValue = active.value;
+        savedStart = active.selectionStart;
+        savedEnd = active.selectionEnd;
+      }
+      render();
+      if (savedId) {
+        const el = document.getElementById(savedId);
+        if (el) {
+          el.value = savedValue;
+          el.focus();
+          try { el.setSelectionRange(savedStart, savedEnd); } catch (e) {}
+        }
+      }
     }
 
     function render() {
@@ -645,7 +707,7 @@
           tasks.unshift(task);
           sandbox = sandbox.filter(s => s.id !== id);
           renderSandbox();
-          render();
+          renderPreservingFocus();
           switchTab('board');
         } else {
           const data = await res.json();
