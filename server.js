@@ -183,6 +183,53 @@ app.delete('/api/tasks/:id', authMiddleware, async (req, res) => {
   }
 });
 
+app.patch('/api/tasks/:id', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { text } = req.body;
+    if (!text || !text.trim()) {
+      return res.status(400).json({ error: 'Task text is required' });
+    }
+    const result = await db.editTaskText(req.user.id, req.user.username, id, text.trim());
+    res.json(result);
+  } catch (err) {
+    if (err.message === 'Task not found') {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    if (err.code === 'FORBIDDEN') {
+      return res.status(403).json({ error: 'Only the author can edit this task' });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/tasks/:id/comments', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const comments = await db.getComments(id);
+    res.json(comments);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/tasks/:id/comments', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { text } = req.body;
+    if (!text || !text.trim()) {
+      return res.status(400).json({ error: 'Comment text is required' });
+    }
+    const comment = await db.addComment(id, req.user.id, req.user.username, text.trim());
+    res.json(comment);
+  } catch (err) {
+    if (err.message === 'Task not found') {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/tasks/:id/history', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;

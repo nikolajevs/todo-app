@@ -75,6 +75,24 @@
     .history-time { color: #aaa; }
 
     .task-actions { display: flex; gap: 8px; flex-shrink: 0; }
+    .edit-btn { background: none; border: none; cursor: pointer; font-size: 15px; color: #ccc; padding: 4px 6px; transition: color 0.2s; }
+    .edit-btn:hover { color: #2196f3; }
+
+    .edit-box { display: flex; gap: 8px; margin-bottom: 0.5rem; }
+    .edit-box input[type="text"] { border: 1px solid #ddd; border-radius: 4px; padding: 6px 8px; font-size: 14px; }
+    .edit-save { padding: 4px 12px; font-size: 12px; background: #333; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+    .edit-cancel { padding: 4px 12px; font-size: 12px; background: none; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; color: #666; }
+
+    .comments-box { margin-top: 0.75rem; padding: 0.75rem; background: #fafafa; border-radius: 6px; }
+    .comment-entry { padding: 6px 0; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+    .comment-entry:last-child { border-bottom: none; }
+    .comment-user { color: #333; font-weight: 500; }
+    .comment-time { color: #aaa; font-size: 11px; margin-left: 6px; }
+    .comment-text { margin-top: 2px; color: #444; word-break: break-word; }
+    .comment-form { display: flex; gap: 8px; margin-top: 0.5rem; }
+    .comment-form input { flex: 1; border: 1px solid #ddd; border-radius: 4px; padding: 6px 8px; font-size: 13px; }
+    .comment-send { padding: 4px 12px; font-size: 12px; background: #333; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+    .no-comments { color: #999; font-size: 12px; padding: 4px 0; }
     .delete-btn { background: none; border: none; cursor: pointer; font-size: 16px; color: #ccc; padding: 4px 8px; transition: color 0.2s; }
     .delete-btn:hover { color: #f44336; }
 
@@ -450,7 +468,62 @@
     }
     async function toggleHistory(id) { if (openHistory[id]) delete openHistory[id]; else await loadHistory(id); render(); }
 
-    const ACTION_LABELS = { 'created': 'создал(а) задачу', 'status_changed': 'изменил(а) статус' };
+    let editingId = null;
+    function startEdit(id) {
+      const task = tasks.find(t => t.id === id);
+      const currentText = task ? task.text : '';
+      editingId = id;
+      render();
+      setTimeout(() => { const el = document.getElementById('editInput-' + id); if (el) { el.focus(); el.value = currentText; } }, 0);
+    }
+    function cancelEdit() { editingId = null; render(); }
+    async function saveEdit(id) {
+      const el = document.getElementById('editInput-' + id);
+      const text = el ? el.value.trim() : '';
+      if (!text) return;
+      try {
+        const res = await fetch(API + '/tasks/' + id, { method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ text }) });
+        if (res.ok) {
+          const result = await res.json();
+          const task = tasks.find(t => t.id === id);
+          if (task) task.text = result.text;
+          editingId = null;
+          if (openHistory[id]) await loadHistory(id);
+          render();
+        } else {
+          const data = await res.json();
+          alert(data.error || 'Не удалось сохранить');
+        }
+      } catch (err) { alert('Ошибка сети'); }
+    }
+
+    let openComments = {};
+    async function loadComments(id) {
+      try { const res = await fetch(API + '/tasks/' + id + '/comments', { headers: authHeaders() }); if (res.ok) openComments[id] = await res.json(); } catch (err) {}
+    }
+    async function toggleComments(id) {
+      if (openComments[id]) delete openComments[id];
+      else await loadComments(id);
+      render();
+    }
+    async function submitComment(id) {
+      const el = document.getElementById('commentInput-' + id);
+      const text = el ? el.value.trim() : '';
+      if (!text) return;
+      try {
+        const res = await fetch(API + '/tasks/' + id + '/comments', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ text }) });
+        if (res.ok) {
+          const comment = await res.json();
+          if (!openComments[id]) openComments[id] = [];
+          openComments[id].push(comment);
+          const task = tasks.find(t => t.id === id);
+          if (task) task.comment_count = (task.comment_count || 0) + 1;
+          render();
+        }
+      } catch (err) {}
+    }
+
+    const ACTION_LABELS = { 'created': 'создал(а) задачу', 'status_changed': 'изменил(а) статус', 'text_edited': 'изменил(а) текст' };
     function formatTime(iso) {
       const d = new Date(iso.replace(' ', 'T') + (iso.includes('Z') ? '' : 'Z'));
       return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -463,6 +536,25 @@
         <div class="history-entry"><span class="history-user">${escapeHtml(e.user_name)}</span> ${ACTION_LABELS[e.action] || e.action}${e.details ? ': ' + escapeHtml(e.details) : ''} <span class="history-time">— ${formatTime(e.created_at)}</span></div>`).join('') + '</div>';
     }
 
+    function renderComments(id) {
+      const list = openComments[id];
+      if (!list) return '';
+      const items = list.length === 0
+        ? '<div class="no-comments">Пока нет комментариев</div>'
+        : list.map(c => `
+          <div class="comment-entry">
+            <span class="comment-user">${escapeHtml(c.user_name)}</span><span class="comment-time">${formatTime(c.created_at)}</span>
+            <div class="comment-text">${escapeHtml(c.text)}</div>
+          </div>`).join('');
+      return `<div class="comments-box">
+        ${items}
+        <div class="comment-form">
+          <input type="text" id="commentInput-${id}" placeholder="Написать комментарий..." onkeypress="if(event.key==='Enter') submitComment(${id})">
+          <button class="comment-send" onclick="submitComment(${id})">Отправить</button>
+        </div>
+      </div>`;
+    }
+
     function render() {
       if (tasks.length === 0) {
         taskList.innerHTML = '<div class="empty-state">No tasks. Add one or pull from Песочница Claude.</div>';
@@ -473,17 +565,30 @@
         const workerBadge = (task.status === 'in_progress' && task.worker_name) ? `<span class="worker-badge">${escapeHtml(task.worker_name)}</span>` : '';
         const canDelete = task.author_id === userId;
         const deleteBtn = canDelete ? `<button class="delete-btn" onclick="deleteTask(${task.id})" title="Delete">✕</button>` : '';
+        const editBtn = canDelete ? `<button class="edit-btn" onclick="startEdit(${task.id})" title="Редактировать">✎</button>` : '';
         const historyLabel = openHistory[task.id] ? 'скрыть историю' : 'история';
+        const commentsCount = task.comment_count || 0;
+        const commentsLabel = openComments[task.id] ? 'скрыть комментарии' : `комментарии${commentsCount ? ' (' + commentsCount + ')' : ''}`;
         const sourceTag = task.source ? `<span class="source-tag">${escapeHtml(task.source)}</span>` : '';
+
+        const textBlock = editingId === task.id
+          ? `<div class="edit-box">
+               <input type="text" id="editInput-${task.id}" value="${escapeHtml(task.text)}" onkeypress="if(event.key==='Enter') saveEdit(${task.id})">
+               <button class="edit-save" onclick="saveEdit(${task.id})">Сохранить</button>
+               <button class="edit-cancel" onclick="cancelEdit()">Отмена</button>
+             </div>`
+          : `<div class="task-text ${task.status === 'closed' ? 'closed' : ''}">${escapeHtml(task.text)}${sourceTag}</div>`;
+
         return `
         <li class="task-item" data-id="${task.id}">
           <div class="status-indicator ${task.status}"></div>
           <div class="task-content">
-            <div class="task-text ${task.status === 'closed' ? 'closed' : ''}">${escapeHtml(task.text)}${sourceTag}</div>
+            ${textBlock}
             <div class="task-meta">
               <span>Автор: ${escapeHtml(task.author_name || '—')}</span>
               ${workerBadge}
               <button class="history-toggle" onclick="toggleHistory(${task.id})">${historyLabel}</button>
+              <button class="history-toggle" onclick="toggleComments(${task.id})">${commentsLabel}</button>
             </div>
             <div class="status-buttons">
               <button class="status-btn ${task.status === 'open' ? 'active open' : 'open'}" onclick="updateStatus(${task.id}, 'open')">Открыта</button>
@@ -491,8 +596,9 @@
               <button class="status-btn ${task.status === 'closed' ? 'active closed' : 'closed'}" onclick="updateStatus(${task.id}, 'closed')">Закрыта</button>
             </div>
             ${renderHistory(task.id)}
+            ${renderComments(task.id)}
           </div>
-          <div class="task-actions">${deleteBtn}</div>
+          <div class="task-actions">${editBtn}${deleteBtn}</div>
         </li>`;
       }).join('');
 

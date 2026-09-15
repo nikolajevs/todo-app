@@ -69,7 +69,20 @@ function initDb() {
             key TEXT PRIMARY KEY,
             value TEXT
           )
-        `, (err) => {
+        `);
+
+        db.run(`
+          CREATE TABLE IF NOT EXISTS comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            user_name TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          )
+        `);
+
+        db.run('CREATE INDEX IF NOT EXISTS idx_comments_task ON comments(task_id)', (err) => {
           if (err) reject(err);
           else resolve(db);
         });
@@ -119,7 +132,10 @@ function getTaskById(id) {
 
 function getAllTasks() {
   return new Promise((resolve, reject) => {
-    db.all('SELECT * FROM tasks ORDER BY id DESC', (err, rows) => {
+    db.all(`
+      SELECT t.*, (SELECT COUNT(*) FROM comments c WHERE c.task_id = t.id) AS comment_count
+      FROM tasks t ORDER BY t.id DESC
+    `, (err, rows) => {
       if (err) reject(err); else resolve(rows || []);
     });
   });
@@ -183,6 +199,52 @@ async function deleteTask(userId, id) {
     db.run('DELETE FROM tasks WHERE id = ?', [id], function(err) {
       if (err) reject(err); else resolve({ id });
     });
+  });
+}
+
+function truncate(s, n) { return s.length > n ? s.slice(0, n) + '…' : s; }
+
+async function editTaskText(userId, userName, id, newText) {
+  const task = await getTaskById(id);
+  if (!task) throw new Error('Task not found');
+  if (task.author_id !== userId) {
+    const e = new Error('Only the author can edit this task');
+    e.code = 'FORBIDDEN';
+    throw e;
+  }
+  const oldText = task.text;
+  return new Promise((resolve, reject) => {
+    db.run('UPDATE tasks SET text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [newText, id],
+      function(err) {
+        if (err) reject(err);
+        else {
+          const details = `«${truncate(oldText, 60)}» → «${truncate(newText, 60)}»`;
+          logHistory(id, userId, userName, 'text_edited', details)
+            .then(() => resolve({ id, text: newText }))
+            .catch(reject);
+        }
+      });
+  });
+}
+
+function getComments(taskId) {
+  return new Promise((resolve, reject) => {
+    db.all('SELECT * FROM comments WHERE task_id = ? ORDER BY id ASC', [taskId],
+      (err, rows) => { if (err) reject(err); else resolve(rows || []); });
+  });
+}
+
+async function addComment(taskId, userId, userName, text) {
+  const task = await getTaskById(taskId);
+  if (!task) throw new Error('Task not found');
+  return new Promise((resolve, reject) => {
+    db.run('INSERT INTO comments (task_id, user_id, user_name, text) VALUES (?, ?, ?, ?)',
+      [taskId, userId, userName, text],
+      function(err) {
+        if (err) reject(err);
+        else resolve({ id: this.lastID, task_id: taskId, user_id: userId, user_name: userName, text, created_at: new Date().toISOString() });
+      });
   });
 }
 
@@ -259,6 +321,7 @@ function setSetting(key, value) {
 module.exports = {
   initDb, createUser, findUserByUsername,
   getAllTasks, getTaskById, addTask, updateTaskStatus, deleteTask, getTaskHistory,
+  editTaskText, getComments, addComment,
   getSandboxTasks, getSandboxById, addSandboxTask, markSandboxStatus, promoteSandboxTask, countSandbox,
   getSetting, setSetting
 };
