@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>To-do</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif; background: #fff; color: #333; }
+    .container { max-width: 720px; margin: 0 auto; padding: 2rem 1rem; }
+    h1 { font-size: 28px; font-weight: 400; margin-bottom: 1.5rem; color: #000; }
+
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+    .header h1 { margin-bottom: 0; font-size: 24px; }
+    .user-info { display: flex; align-items: center; gap: 12px; font-size: 14px; color: #666; }
+    .logout-btn { background: none; border: 1px solid #ddd; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; color: #666; transition: all 0.2s; }
+    .logout-btn:hover { background: #f5f5f5; color: #333; }
+
+    input[type="text"], input[type="password"] { width: 100%; padding: 0.75rem 0; font-size: 16px; border: none; border-bottom: 1px solid #e0e0e0; background: transparent; outline: none; color: #333; transition: border-color 0.2s; }
+    input:focus { border-bottom-color: #999; }
+    input::placeholder { color: #ccc; }
+    .input-wrapper { margin-bottom: 1.5rem; }
+
+    .auth-box { max-width: 360px; margin: 4rem auto; }
+    .auth-box input { margin-bottom: 1.5rem; }
+    .auth-btn { width: 100%; padding: 0.75rem; background: #333; color: #fff; border: none; border-radius: 4px; font-size: 15px; cursor: pointer; transition: background 0.2s; margin-bottom: 1rem; }
+    .auth-btn:hover { background: #555; }
+    .auth-switch { text-align: center; font-size: 14px; color: #666; }
+    .auth-switch a { color: #2196f3; cursor: pointer; text-decoration: none; }
+    .auth-switch a:hover { text-decoration: underline; }
+    .error-msg { color: #f44336; font-size: 13px; margin-bottom: 1rem; min-height: 18px; }
+
+    .tabs { display: flex; gap: 4px; margin-bottom: 1.5rem; border-bottom: 1px solid #f0f0f0; }
+    .tab { padding: 0.6rem 1rem; font-size: 15px; color: #999; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all 0.2s; background: none; border-top: none; border-left: none; border-right: none; display: flex; align-items: center; gap: 8px; }
+    .tab.active { color: #333; border-bottom-color: #333; }
+    .tab-badge { background: #eee; color: #666; font-size: 12px; padding: 1px 8px; border-radius: 10px; }
+    .tab.active .tab-badge { background: #333; color: #fff; }
+
+    .task-list { list-style: none; min-height: 60px; }
+    .task-list.drop-active { background: #f0f8ff; border: 2px dashed #2196f3; border-radius: 8px; }
+
+    .task-item { display: flex; align-items: flex-start; gap: 12px; padding: 1rem 0; border-bottom: 1px solid #f0f0f0; animation: slideIn 0.2s ease; }
+    @keyframes slideIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+    .task-item.removing { animation: slideOut 0.2s ease; opacity: 0; }
+    @keyframes slideOut { to { opacity: 0; transform: translateY(-10px); } }
+
+    .status-indicator { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
+    .status-indicator.open { background: #ff9800; }
+    .status-indicator.in_progress { background: #2196f3; }
+    .status-indicator.closed { background: #4caf50; }
+
+    .task-content { flex: 1; min-width: 0; }
+    .task-text { word-break: break-word; margin-bottom: 0.35rem; }
+    .task-text.closed { text-decoration: line-through; color: #999; }
+    .source-tag { display: inline-block; font-size: 11px; background: #f3e5f5; color: #7b1fa2; padding: 1px 7px; border-radius: 10px; margin-left: 6px; vertical-align: middle; }
+
+    .task-meta { font-size: 12px; color: #999; margin-bottom: 0.5rem; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .worker-badge { display: inline-flex; align-items: center; gap: 5px; background: #e3f2fd; color: #1565c0; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+    .worker-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #2196f3; }
+
+    .status-buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 0.5rem; }
+    .status-btn { padding: 4px 8px; font-size: 12px; border: 1px solid #ddd; background: #f5f5f5; cursor: pointer; border-radius: 4px; transition: all 0.2s; color: #666; }
+    .status-btn:hover { background: #e0e0e0; }
+    .status-btn.active { color: #fff; border: none; }
+    .status-btn.active.open { background: #ff9800; }
+    .status-btn.active.in_progress { background: #2196f3; }
+    .status-btn.active.closed { background: #4caf50; }
+
+    .history-toggle { background: none; border: none; color: #999; font-size: 12px; cursor: pointer; padding: 0; text-decoration: underline; text-decoration-color: #ddd; }
+    .history-toggle:hover { color: #666; }
+    .history-box { margin-top: 0.75rem; padding: 0.75rem; background: #fafafa; border-radius: 6px; font-size: 12px; color: #666; }
+    .history-entry { padding: 4px 0; border-bottom: 1px solid #f0f0f0; }
+    .history-entry:last-child { border-bottom: none; }
+    .history-user { color: #333; font-weight: 500; }
+    .history-time { color: #aaa; }
+
+    .task-actions { display: flex; gap: 8px; flex-shrink: 0; }
+    .delete-btn { background: none; border: none; cursor: pointer; font-size: 16px; color: #ccc; padding: 4px 8px; transition: color 0.2s; }
+    .delete-btn:hover { color: #f44336; }
+
+    .empty-state { color: #999; font-size: 14px; text-align: center; padding: 2rem 0; }
+    .stats { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid #f0f0f0; font-size: 13px; color: #999; text-align: center; }
+    .stat-row { display: flex; justify-content: center; gap: 2rem; margin-top: 0.5rem; }
+    .stat-item { display: flex; align-items: center; gap: 6px; }
+    .stat-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+    .sandbox-intro { font-size: 13px; color: #999; margin-bottom: 1.5rem; line-height: 1.5; }
+    .sb-card { border: 1px solid #eee; border-radius: 10px; padding: 1rem; margin-bottom: 1rem; cursor: grab; transition: box-shadow 0.2s, border-color 0.2s; background: #fff; }
+    .sb-card:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.08); border-color: #ddd; }
+    .sb-card.dragging { opacity: 0.4; }
+    .sb-head { display: flex; align-items: center; gap: 8px; margin-bottom: 0.5rem; flex-wrap: wrap; }
+    .sb-title { font-weight: 500; font-size: 15px; flex: 1; min-width: 0; }
+    .sb-desc { font-size: 13px; color: #666; line-height: 1.5; margin-bottom: 0.75rem; }
+    .sb-tag { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+    .cat-security { background: #ffebee; color: #c62828; }
+    .cat-performance { background: #fff3e0; color: #e65100; }
+    .cat-feature { background: #e8f5e9; color: #2e7d32; }
+    .cat-bug { background: #fce4ec; color: #ad1457; }
+    .cat-refactor { background: #e3f2fd; color: #1565c0; }
+    .cat-improvement { background: #f3e5f5; color: #7b1fa2; }
+    .prio { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
+    .prio-high { background: #ffcdd2; color: #b71c1c; }
+    .prio-medium { background: #ffe0b2; color: #e65100; }
+    .prio-low { background: #dcedc8; color: #33691e; }
+    .sb-actions { display: flex; gap: 8px; }
+    .sb-promote { padding: 6px 14px; font-size: 13px; background: #333; color: #fff; border: none; border-radius: 6px; cursor: pointer; transition: background 0.2s; }
+    .sb-promote:hover { background: #555; }
+    .sb-dismiss { padding: 6px 14px; font-size: 13px; background: none; color: #999; border: 1px solid #ddd; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
+    .sb-dismiss:hover { background: #f5f5f5; color: #666; }
+
+    .settings-card { border: 1px solid #eee; border-radius: 12px; padding: 1.5rem; max-width: 520px; }
+    .field-label { display: block; font-size: 13px; font-weight: 500; color: #555; margin-bottom: 0.5rem; }
+    .field-hint { font-size: 12px; color: #aaa; margin-top: 0.4rem; }
+    .field-hint code { background: #f5f5f5; padding: 1px 5px; border-radius: 3px; font-size: 11px; }
+    .settings-actions { display: flex; gap: 12px; align-items: center; margin-top: 1.75rem; }
+    .verify-result { margin-top: 1.25rem; font-size: 13px; padding: 0.75rem 1rem; border-radius: 8px; display: none; }
+    .verify-result.ok { display: block; background: #e8f5e9; color: #2e7d32; }
+    .verify-result.err { display: block; background: #ffebee; color: #c62828; }
+    .verify-result.loading { display: block; background: #f5f5f5; color: #666; }
+
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <div id="authScreen" class="auth-box">
+      <h1 id="authTitle">Sign in</h1>
+      <div class="error-msg" id="authError"></div>
+      <input type="text" id="authUsername" placeholder="Username" autocomplete="username">
+      <input type="password" id="authPassword" placeholder="Password" autocomplete="current-password">
+      <button class="auth-btn" id="authSubmit" onclick="submitAuth()">Sign in</button>
+      <div class="auth-switch">
+        <span id="authSwitchText">No account?</span>
+        <a onclick="toggleAuthMode()" id="authSwitchLink">Sign up</a>
+      </div>
+    </div>
+
+    <div id="appScreen" class="hidden">
+      <div class="header">
+        <h1>To-do</h1>
+        <div class="user-info">
+          <span id="currentUser"></span>
+          <button class="logout-btn" onclick="logout()">Logout</button>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab active" id="tabBoard" onclick="switchTab('board')">Общая доска</button>
+        <button class="tab" id="tabSandbox" onclick="switchTab('sandbox')">
+          Песочница Claude <span class="tab-badge" id="sandboxCount">0</span>
+        </button>
+        <button class="tab" id="tabSettings" onclick="switchTab('settings')">Настройки</button>
+      </div>
+
+      <div id="boardView">
+        <div class="input-wrapper">
+          <input type="text" id="taskInput" placeholder="Add a task..." autocomplete="off">
+        </div>
+        <ul class="task-list" id="taskList"></ul>
+        <div class="stats" id="stats"></div>
+      </div>
+
+      <div id="sandboxView" class="hidden">
+        <div class="sandbox-intro">
+          Здесь — предложения от Claude по улучшению проекта: анализ кода, найденные недочёты, идеи фич.
+          Перетащи карточку на вкладку «Общая доска» или нажми «В пулл», чтобы превратить её в задачу.
+        </div>
+        <div id="sandboxList"></div>
+      </div>
+
+      <div id="settingsView" class="hidden">
+        <div class="sandbox-intro">
+          Подключи GitHub-репозиторий проекта. Claude будет анализировать его код и складывать
+          найденные улучшения в Песочницу.
+        </div>
+
+        <div class="settings-card">
+          <label class="field-label">Репозиторий</label>
+          <input type="text" id="repoUrl" placeholder="github.com/nikolajevs/BRIDGE" autocomplete="off">
+          <div class="field-hint">Форматы: <code>github.com/owner/repo</code>, <code>owner/repo</code> или полный https-URL</div>
+
+          <label class="field-label" style="margin-top:1.25rem;">Ветка</label>
+          <input type="text" id="repoBranch" placeholder="main" autocomplete="off">
+
+          <label class="field-label" style="margin-top:1.25rem;">Access token <span style="color:#aaa;font-weight:400;">(только для приватных репо)</span></label>
+          <input type="password" id="repoToken" placeholder="ghp_..." autocomplete="new-password">
+          <div class="field-hint" id="tokenHint"></div>
+
+          <div class="settings-actions">
+            <button class="auth-btn" style="width:auto;margin:0;padding:0.6rem 1.5rem;" onclick="saveSettings()">Сохранить</button>
+            <button class="sb-dismiss" onclick="verifyRepo()">Проверить связь</button>
+          </div>
+
+          <div class="verify-result" id="verifyResult"></div>
+        </div>
+
+        <div class="settings-card" style="margin-top:1.5rem;">
+          <label class="field-label">Анализ кода через Claude</label>
+          <div class="field-hint" style="margin-bottom:1rem;">
+            Claude прочитает код подключённого репозитория и добавит найденные улучшения в Песочницу.
+            Занимает 15–40 секунд.
+          </div>
+          <button class="auth-btn" style="width:auto;margin:0;padding:0.6rem 1.5rem;" id="analyzeBtn" onclick="runAnalysis()">Проанализировать репозиторий</button>
+          <div class="verify-result" id="analyzeResult"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const API = '/api';
+    let token = localStorage.getItem('todoToken');
+    let username = localStorage.getItem('todoUsername');
+    let userId = parseInt(localStorage.getItem('todoUserId') || '0');
+    let isRegisterMode = false;
+    let tasks = [];
+    let sandbox = [];
+    let pollTimer = null;
+    let openHistory = {};
+    let currentTab = 'board';
+
+    const authScreen = document.getElementById('authScreen');
+    const appScreen = document.getElementById('appScreen');
+    const authTitle = document.getElementById('authTitle');
+    const authError = document.getElementById('authError');
+    const authSubmit = document.getElementById('authSubmit');
+    const authSwitchText = document.getElementById('authSwitchText');
+    const authSwitchLink = document.getElementById('authSwitchLink');
+    const taskInput = document.getElementById('taskInput');
+    const taskList = document.getElementById('taskList');
+    const statsDiv = document.getElementById('stats');
+    const sandboxList = document.getElementById('sandboxList');
+    const sandboxCount = document.getElementById('sandboxCount');
+    const tabBoardBtn = document.getElementById('tabBoard');
+
+    function toggleAuthMode() {
+      isRegisterMode = !isRegisterMode;
+      authError.textContent = '';
+      if (isRegisterMode) {
+        authTitle.textContent = 'Sign up'; authSubmit.textContent = 'Sign up';
+        authSwitchText.textContent = 'Already have an account?'; authSwitchLink.textContent = 'Sign in';
+      } else {
+        authTitle.textContent = 'Sign in'; authSubmit.textContent = 'Sign in';
+        authSwitchText.textContent = 'No account?'; authSwitchLink.textContent = 'Sign up';
+      }
+    }
+
+    function parseJwt(t) { try { return JSON.parse(atob(t.split('.')[1])); } catch (e) { return {}; } }
+
+    async function submitAuth() {
+      const u = document.getElementById('authUsername').value.trim();
+      const p = document.getElementById('authPassword').value;
+      authError.textContent = '';
+      if (!u || !p) { authError.textContent = 'Enter username and password'; return; }
+      const endpoint = isRegisterMode ? '/auth/register' : '/auth/login';
+      try {
+        const res = await fetch(API + endpoint, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: u, password: p })
+        });
+        const data = await res.json();
+        if (!res.ok) { authError.textContent = data.error || 'Something went wrong'; return; }
+        token = data.token; username = data.username; userId = parseJwt(token).id;
+        localStorage.setItem('todoToken', token);
+        localStorage.setItem('todoUsername', username);
+        localStorage.setItem('todoUserId', userId);
+        showApp();
+      } catch (err) { authError.textContent = 'Connection error'; }
+    }
+
+    function logout() {
+      token = null; username = null; userId = 0;
+      localStorage.removeItem('todoToken'); localStorage.removeItem('todoUsername'); localStorage.removeItem('todoUserId');
+      tasks = []; sandbox = [];
+      if (pollTimer) clearInterval(pollTimer);
+      showAuth();
+    }
+
+    function showApp() {
+      authScreen.classList.add('hidden');
+      appScreen.classList.remove('hidden');
+      document.getElementById('currentUser').textContent = username;
+      loadTasks();
+      loadSandbox();
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(() => { loadTasks(); loadSandbox(); }, 5000);
+    }
+
+    function showAuth() {
+      appScreen.classList.add('hidden');
+      authScreen.classList.remove('hidden');
+      document.getElementById('authUsername').value = '';
+      document.getElementById('authPassword').value = '';
+    }
+
+    function switchTab(tab) {
+      currentTab = tab;
+      document.getElementById('tabBoard').classList.toggle('active', tab === 'board');
+      document.getElementById('tabSandbox').classList.toggle('active', tab === 'sandbox');
+      document.getElementById('tabSettings').classList.toggle('active', tab === 'settings');
+      document.getElementById('boardView').classList.toggle('hidden', tab !== 'board');
+      document.getElementById('sandboxView').classList.toggle('hidden', tab !== 'sandbox');
+      document.getElementById('settingsView').classList.toggle('hidden', tab !== 'settings');
+      if (tab === 'settings') loadSettings();
+    }
+
+    async function loadSettings() {
+      try {
+        const res = await fetch(API + '/settings', { headers: authHeaders() });
+        if (!res.ok) return;
+        const s = await res.json();
+        document.getElementById('repoUrl').value = s.repo_url || '';
+        document.getElementById('repoBranch').value = s.repo_branch || 'main';
+        document.getElementById('repoToken').value = '';
+        document.getElementById('tokenHint').textContent = s.has_token
+          ? 'Токен сохранён. Оставь поле пустым, чтобы не менять его.'
+          : 'Токен не задан.';
+      } catch (err) {}
+    }
+
+    async function saveSettings() {
+      const repo_url = document.getElementById('repoUrl').value.trim();
+      const repo_branch = document.getElementById('repoBranch').value.trim() || 'main';
+      const repo_token = document.getElementById('repoToken').value;
+      const box = document.getElementById('verifyResult');
+      try {
+        const res = await fetch(API + '/settings', {
+          method: 'POST', headers: authHeaders(),
+          body: JSON.stringify({ repo_url, repo_branch, repo_token })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          box.className = 'verify-result ok';
+          box.textContent = '✓ Настройки сохранены';
+          loadSettings();
+        } else {
+          box.className = 'verify-result err';
+          box.textContent = data.error || 'Ошибка сохранения';
+        }
+      } catch (err) {
+        box.className = 'verify-result err';
+        box.textContent = 'Ошибка сети';
+      }
+    }
+
+    async function runAnalysis() {
+      const box = document.getElementById('analyzeResult');
+      const btn = document.getElementById('analyzeBtn');
+      btn.disabled = true;
+      btn.style.opacity = '0.6';
+      box.className = 'verify-result loading';
+      box.textContent = 'Claude читает код репозитория и анализирует... это может занять до минуты.';
+      try {
+        const res = await fetch(API + '/analyze', { method: 'POST', headers: authHeaders() });
+        const data = await res.json();
+        if (res.ok) {
+          box.className = 'verify-result ok';
+          box.innerHTML = `✓ Проанализировано файлов: <b>${data.analyzed_files}</b>. ` +
+            `Предложений от Claude: <b>${data.suggestions_total}</b>. ` +
+            `Добавлено новых в Песочницу: <b>${data.added}</b>.` +
+            (data.added > 0 ? ' Открой вкладку «Песочница Claude».' : ' Дубликаты пропущены.');
+          loadSandbox();
+        } else {
+          box.className = 'verify-result err';
+          box.textContent = '✗ ' + (data.error || 'Ошибка анализа');
+        }
+      } catch (err) {
+        box.className = 'verify-result err';
+        box.textContent = '✗ Ошибка сети или таймаут';
+      }
+      btn.disabled = false;
+      btn.style.opacity = '1';
+    }
+
+    async function verifyRepo() {
+      const box = document.getElementById('verifyResult');
+      box.className = 'verify-result loading';
+      box.textContent = 'Проверяю связь с GitHub...';
+      try {
+        const res = await fetch(API + '/settings/verify', { method: 'POST', headers: authHeaders() });
+        const data = await res.json();
+        if (res.ok && data.ok) {
+          box.className = 'verify-result ok';
+          box.innerHTML = `✓ Подключено: <b>${escapeHtml(data.full_name)}</b>` +
+            `${data.private ? ' (приватный)' : ''}` +
+            `${data.language ? ' · ' + escapeHtml(data.language) : ''}` +
+            `${data.default_branch ? ' · ветка по умолчанию: ' + escapeHtml(data.default_branch) : ''}`;
+        } else {
+          box.className = 'verify-result err';
+          box.textContent = '✗ ' + (data.error || 'Не удалось подключиться');
+        }
+      } catch (err) {
+        box.className = 'verify-result err';
+        box.textContent = '✗ Ошибка сети';
+      }
+    }
+
+    function authHeaders() { return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }; }
+
+    async function loadTasks() {
+      try {
+        const res = await fetch(API + '/tasks', { headers: authHeaders() });
+        if (res.status === 401 || res.status === 403) { logout(); return; }
+        tasks = await res.json();
+        render();
+      } catch (err) { taskList.innerHTML = '<div class="empty-state">Failed to load tasks</div>'; }
+    }
+
+    async function loadSandbox() {
+      try {
+        const res = await fetch(API + '/sandbox', { headers: authHeaders() });
+        if (res.ok) { sandbox = await res.json(); renderSandbox(); }
+      } catch (err) {}
+    }
+
+    async function addTask() {
+      const text = taskInput.value.trim();
+      if (!text) return;
+      try {
+        const res = await fetch(API + '/tasks', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ text }) });
+        if (res.ok) { const task = await res.json(); tasks.unshift(task); taskInput.value = ''; render(); }
+      } catch (err) { alert('Failed to add task'); }
+    }
+
+    async function updateStatus(id, newStatus) {
+      try {
+        const res = await fetch(API + '/tasks/' + id, { method: 'PUT', headers: authHeaders(), body: JSON.stringify({ status: newStatus }) });
+        if (res.ok) {
+          const result = await res.json();
+          const task = tasks.find(t => t.id === id);
+          if (task) { task.status = result.status; task.worker_id = result.worker_id; task.worker_name = result.worker_name; if (openHistory[id]) await loadHistory(id); render(); }
+        }
+      } catch (err) {}
+    }
+
+    async function deleteTask(id) {
+      const el = document.querySelector('[data-id="' + id + '"]');
+      if (el) el.classList.add('removing');
+      try {
+        const res = await fetch(API + '/tasks/' + id, { method: 'DELETE', headers: authHeaders() });
+        if (res.ok) { tasks = tasks.filter(t => t.id !== id); render(); }
+        else { if (el) el.classList.remove('removing'); const data = await res.json(); alert(data.error || 'Cannot delete'); }
+      } catch (err) { if (el) el.classList.remove('removing'); }
+    }
+
+    async function loadHistory(id) {
+      try { const res = await fetch(API + '/tasks/' + id + '/history', { headers: authHeaders() }); if (res.ok) openHistory[id] = await res.json(); } catch (err) {}
+    }
+    async function toggleHistory(id) { if (openHistory[id]) delete openHistory[id]; else await loadHistory(id); render(); }
+
+    const ACTION_LABELS = { 'created': 'создал(а) задачу', 'status_changed': 'изменил(а) статус' };
+    function formatTime(iso) {
+      const d = new Date(iso.replace(' ', 'T') + (iso.includes('Z') ? '' : 'Z'));
+      return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    }
+    function renderHistory(id) {
+      const entries = openHistory[id];
+      if (!entries) return '';
+      if (entries.length === 0) return '<div class="history-box">Нет записей</div>';
+      return '<div class="history-box">' + entries.map(e => `
+        <div class="history-entry"><span class="history-user">${escapeHtml(e.user_name)}</span> ${ACTION_LABELS[e.action] || e.action}${e.details ? ': ' + escapeHtml(e.details) : ''} <span class="history-time">— ${formatTime(e.created_at)}</span></div>`).join('') + '</div>';
+    }
+
+    function render() {
+      if (tasks.length === 0) {
+        taskList.innerHTML = '<div class="empty-state">No tasks. Add one or pull from Песочница Claude.</div>';
+        statsDiv.innerHTML = '';
+        return;
+      }
+      taskList.innerHTML = tasks.map(task => {
+        const workerBadge = (task.status === 'in_progress' && task.worker_name) ? `<span class="worker-badge">${escapeHtml(task.worker_name)}</span>` : '';
+        const canDelete = task.author_id === userId;
+        const deleteBtn = canDelete ? `<button class="delete-btn" onclick="deleteTask(${task.id})" title="Delete">✕</button>` : '';
+        const historyLabel = openHistory[task.id] ? 'скрыть историю' : 'история';
+        const sourceTag = task.source ? `<span class="source-tag">${escapeHtml(task.source)}</span>` : '';
+        return `
+        <li class="task-item" data-id="${task.id}">
+          <div class="status-indicator ${task.status}"></div>
+          <div class="task-content">
+            <div class="task-text ${task.status === 'closed' ? 'closed' : ''}">${escapeHtml(task.text)}${sourceTag}</div>
+            <div class="task-meta">
+              <span>Автор: ${escapeHtml(task.author_name || '—')}</span>
+              ${workerBadge}
+              <button class="history-toggle" onclick="toggleHistory(${task.id})">${historyLabel}</button>
+            </div>
+            <div class="status-buttons">
+              <button class="status-btn ${task.status === 'open' ? 'active open' : 'open'}" onclick="updateStatus(${task.id}, 'open')">Открыта</button>
+              <button class="status-btn ${task.status === 'in_progress' ? 'active in_progress' : 'in_progress'}" onclick="updateStatus(${task.id}, 'in_progress')">В работе</button>
+              <button class="status-btn ${task.status === 'closed' ? 'active closed' : 'closed'}" onclick="updateStatus(${task.id}, 'closed')">Закрыта</button>
+            </div>
+            ${renderHistory(task.id)}
+          </div>
+          <div class="task-actions">${deleteBtn}</div>
+        </li>`;
+      }).join('');
+
+      const open = tasks.filter(t => t.status === 'open').length;
+      const inProgress = tasks.filter(t => t.status === 'in_progress').length;
+      const closed = tasks.filter(t => t.status === 'closed').length;
+      statsDiv.innerHTML = `<div class="stat-row">
+        <div class="stat-item"><div class="stat-dot" style="background:#ff9800;"></div><span>Открыта: ${open}</span></div>
+        <div class="stat-item"><div class="stat-dot" style="background:#2196f3;"></div><span>В работе: ${inProgress}</span></div>
+        <div class="stat-item"><div class="stat-dot" style="background:#4caf50;"></div><span>Закрыта: ${closed}</span></div>
+      </div>`;
+    }
+
+    const CAT_LABELS = { security: 'Безопасность', performance: 'Производительность', feature: 'Фича', bug: 'Баг', refactor: 'Рефакторинг', improvement: 'Улучшение' };
+    const PRIO_LABELS = { high: 'Высокий', medium: 'Средний', low: 'Низкий' };
+
+    function renderSandbox() {
+      sandboxCount.textContent = sandbox.length;
+      if (sandbox.length === 0) {
+        sandboxList.innerHTML = '<div class="empty-state">Пока пусто. Claude пока не нашёл новых улучшений.</div>';
+        return;
+      }
+      sandboxList.innerHTML = sandbox.map(s => `
+        <div class="sb-card" draggable="true" data-sb-id="${s.id}"
+             ondragstart="onDragStart(event, ${s.id})" ondragend="onDragEnd(event)">
+          <div class="sb-head">
+            <span class="sb-title">${escapeHtml(s.title)}</span>
+            <span class="sb-tag cat-${s.category}">${CAT_LABELS[s.category] || s.category}</span>
+            <span class="prio prio-${s.priority}">${PRIO_LABELS[s.priority] || s.priority}</span>
+          </div>
+          ${s.description ? `<div class="sb-desc">${escapeHtml(s.description)}</div>` : ''}
+          <div class="sb-actions">
+            <button class="sb-promote" onclick="promote(${s.id})">→ В пулл</button>
+            <button class="sb-dismiss" onclick="dismiss(${s.id})">Скрыть</button>
+          </div>
+        </div>`).join('');
+    }
+
+    async function promote(id) {
+      try {
+        const res = await fetch(API + '/sandbox/' + id + '/promote', { method: 'POST', headers: authHeaders() });
+        if (res.ok) {
+          const task = await res.json();
+          tasks.unshift(task);
+          sandbox = sandbox.filter(s => s.id !== id);
+          renderSandbox();
+          render();
+          switchTab('board');
+        } else {
+          const data = await res.json();
+          alert(data.error || 'Не удалось переместить');
+          loadSandbox();
+        }
+      } catch (err) { alert('Ошибка сети'); }
+    }
+
+    async function dismiss(id) {
+      try {
+        const res = await fetch(API + '/sandbox/' + id + '/dismiss', { method: 'POST', headers: authHeaders() });
+        if (res.ok) { sandbox = sandbox.filter(s => s.id !== id); renderSandbox(); }
+      } catch (err) {}
+    }
+
+    let draggedId = null;
+    function onDragStart(e, id) { draggedId = id; e.currentTarget.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; }
+    function onDragEnd(e) { e.currentTarget.classList.remove('dragging'); draggedId = null; tabBoardBtn.style.background = ''; }
+
+    tabBoardBtn.addEventListener('dragover', e => { if (draggedId) { e.preventDefault(); tabBoardBtn.style.background = '#e3f2fd'; } });
+    tabBoardBtn.addEventListener('dragleave', () => { tabBoardBtn.style.background = ''; });
+    tabBoardBtn.addEventListener('drop', e => { e.preventDefault(); tabBoardBtn.style.background = ''; if (draggedId) promote(draggedId); });
+
+    function escapeHtml(text) {
+      const map = { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;' };
+      return String(text).replace(/[&<>"']/g, m => map[m]);
+    }
+
+    taskInput.addEventListener('keypress', e => { if (e.key === 'Enter') addTask(); });
+    document.getElementById('authPassword').addEventListener('keypress', e => { if (e.key === 'Enter') submitAuth(); });
+
+    if (token && username) { showApp(); } else { showAuth(); }
+  </script>
+</body>
+</html>
