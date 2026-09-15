@@ -305,8 +305,29 @@
       // это подстраховка на случай пропущенных событий, а не опрос по таймеру.
       socket.on('connect', () => { loadTasks(); loadSandbox(); });
 
+    // Единая точка добавления задачи — вызывается и из ответа на свой POST, и из
+    // чужого сокет-события. Дедуп по id защищает от гонки (сокет-эхо может прийти
+    // раньше, чем резолвится собственный fetch).
+    function upsertTask(task) {
+      const i = tasks.findIndex(t => t.id === task.id);
+      if (i === -1) tasks.unshift(task);
+      else Object.assign(tasks[i], task);
+    }
+
+    // Аналогично для комментариев: инкремент счётчика и добавление в открытый
+    // тред идёт строго один раз на id комментария, откуда бы он ни пришёл.
+    const seenCommentIds = new Set();
+    function applyComment(taskId, comment) {
+      if (seenCommentIds.has(comment.id)) return;
+      seenCommentIds.add(comment.id);
+      const t = tasks.find(x => x.id === taskId);
+      if (t) t.comment_count = (t.comment_count || 0) + 1;
+      if (openComments[taskId]) openComments[taskId].push(comment);
+    }
+
       socket.on('task:created', (task) => {
-        if (!tasks.some(t => t.id === task.id)) { tasks.unshift(task); renderPreservingFocus(); }
+        upsertTask(task);
+        renderPreservingFocus();
       });
 
       socket.on('task:updated', (result) => {
@@ -324,11 +345,7 @@
       });
 
       socket.on('comment:added', ({ task_id, comment }) => {
-        const t = tasks.find(x => x.id === task_id);
-        if (t) t.comment_count = (t.comment_count || 0) + 1;
-        if (openComments[task_id] && !openComments[task_id].some(c => c.id === comment.id)) {
-          openComments[task_id].push(comment);
-        }
+        applyComment(task_id, comment);
         renderPreservingFocus();
       });
 
@@ -480,7 +497,7 @@
       if (!text) return;
       try {
         const res = await fetch(API + '/tasks', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ text }) });
-        if (res.ok) { const task = await res.json(); tasks.unshift(task); taskInput.value = ''; renderPreservingFocus(); }
+        if (res.ok) { const task = await res.json(); upsertTask(task); taskInput.value = ''; renderPreservingFocus(); }
       } catch (err) { alert('Failed to add task'); }
     }
 
@@ -556,10 +573,7 @@
         const res = await fetch(API + '/tasks/' + id + '/comments', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ text }) });
         if (res.ok) {
           const comment = await res.json();
-          if (!openComments[id]) openComments[id] = [];
-          openComments[id].push(comment);
-          const task = tasks.find(t => t.id === id);
-          if (task) task.comment_count = (task.comment_count || 0) + 1;
+          applyComment(id, comment);
           renderPreservingFocus();
         }
       } catch (err) {}
@@ -704,7 +718,7 @@
         const res = await fetch(API + '/sandbox/' + id + '/promote', { method: 'POST', headers: authHeaders() });
         if (res.ok) {
           const task = await res.json();
-          tasks.unshift(task);
+          upsertTask(task);
           sandbox = sandbox.filter(s => s.id !== id);
           renderSandbox();
           renderPreservingFocus();
