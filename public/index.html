@@ -18,11 +18,7 @@
       min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px;
       background: #f44336; color: #fff; font-size: 12px; font-weight: 600;
     }
-    .notif-badge-sm {
-      display: inline-flex; align-items: center; justify-content: center;
-      min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
-      background: #f44336; color: #fff; font-size: 10px; font-weight: 700; margin-left: 3px;
-    }
+    .unread-inline { color: #f44336; font-weight: 700; }
     .logout-btn { background: none; border: 1px solid #ddd; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; color: #666; transition: all 0.2s; }
     .logout-btn:hover { background: #f5f5f5; color: #333; }
 
@@ -970,8 +966,8 @@
       const commentsCount = task.comment_count || 0;
       const commentsLabel = openComments[task.id] ? 'скрыть комментарии' : `комментарии${commentsCount ? ' (' + commentsCount + ')' : ''}`;
       const taskUnread = unreadByTask[task.id] || 0;
-      const commentsUnreadBadge = (taskUnread > 0 && !openComments[task.id])
-        ? `<span class="notif-badge-sm" title="Новых: ${taskUnread}">${taskUnread}</span>`
+      const unreadInline = (taskUnread > 0 && !openComments[task.id])
+        ? ` <span class="unread-inline">+${taskUnread} нов.</span>`
         : '';
       const attCount = task.attachment_count || 0;
       const attToggle = attCount > 0
@@ -996,7 +992,7 @@
             <span>Автор: ${escapeHtml(task.author_name || '—')}</span>
             ${workerBadge}
             <button class="history-toggle" onclick="toggleHistory(${task.id})">${historyLabel}</button>
-            <button class="history-toggle" onclick="toggleComments(${task.id})">${commentsLabel}</button>${commentsUnreadBadge}
+            <button class="history-toggle" onclick="toggleComments(${task.id})">${commentsLabel}${unreadInline}</button>
             ${attToggle}
           </div>
           ${openTaskAttachments[task.id] ? attachmentThumbsHtml(openTaskAttachments[task.id]) : ''}
