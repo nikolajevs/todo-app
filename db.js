@@ -374,14 +374,14 @@ async function markCommentRead(userId, taskId) {
   return { task_id: taskId, last_read_comment_id: maxId };
 }
 
-async function getUnreadCount(userId) {
+async function getUnreadByTask(userId) {
   const candidates = await all(`
     SELECT id AS task_id FROM tasks WHERE author_id = ?
     UNION
     SELECT DISTINCT task_id FROM comments WHERE user_id = ?
   `, [userId, userId]);
 
-  if (candidates.length === 0) return 0;
+  if (candidates.length === 0) return {};
 
   // Бутстрап: если для задачи ещё нет отметки прочитанного у этого юзера — считаем
   // прочитанным всё, что уже накопилось (чтобы не обрушить старый backlog как «непрочитанное»
@@ -395,14 +395,19 @@ async function getUnreadCount(userId) {
     }
   }
 
-  let total = 0;
+  const byTask = {};
   for (const c of candidates) {
     const readRow = await get('SELECT last_read_comment_id FROM comment_reads WHERE user_id = ? AND task_id = ?', [userId, c.task_id]);
     const lastRead = readRow ? readRow.last_read_comment_id : 0;
     const countRow = await get('SELECT COUNT(*) AS cnt FROM comments WHERE task_id = ? AND id > ? AND user_id != ?', [c.task_id, lastRead, userId]);
-    total += countRow.cnt;
+    if (countRow.cnt > 0) byTask[c.task_id] = countRow.cnt;
   }
-  return total;
+  return byTask;
+}
+
+async function getUnreadCount(userId) {
+  const byTask = await getUnreadByTask(userId);
+  return Object.values(byTask).reduce((a, b) => a + b, 0);
 }
 
 async function addComment(taskId, userId, userName, text, files) {
@@ -502,7 +507,7 @@ module.exports = {
   getAllTasks, getTaskById, addTask, updateTaskStatus, deleteTask, getTaskHistory,
   editTaskText, getComments, addComment,
   getTaskAttachments, getAttachmentData,
-  markCommentRead, getUnreadCount, getInterestedUserIds,
+  markCommentRead, getUnreadCount, getUnreadByTask, getInterestedUserIds,
   getSandboxTasks, getSandboxById, addSandboxTask, markSandboxStatus, promoteSandboxTask, countSandbox,
   getSetting, setSetting
 };

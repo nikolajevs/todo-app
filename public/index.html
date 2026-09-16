@@ -18,6 +18,11 @@
       min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px;
       background: #f44336; color: #fff; font-size: 12px; font-weight: 600;
     }
+    .notif-badge-sm {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+      background: #f44336; color: #fff; font-size: 10px; font-weight: 700; margin-left: 3px;
+    }
     .logout-btn { background: none; border: 1px solid #ddd; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; color: #666; transition: all 0.2s; }
     .logout-btn:hover { background: #f5f5f5; color: #333; }
 
@@ -426,7 +431,6 @@
       socket.on('comment:added', ({ task_id, comment }) => {
         const wasOpen = !!openComments[task_id];
         applyComment(task_id, comment);
-        renderPreservingFocus();
 
         const notifyIds = comment.notify_user_ids || [];
         if (comment.user_id !== userId && notifyIds.includes(userId)) {
@@ -436,9 +440,11 @@
             fetch(API + '/tasks/' + task_id + '/comments/read', { method: 'POST', headers: authHeaders() }).catch(() => {});
           } else {
             unreadCount++;
+            unreadByTask[task_id] = (unreadByTask[task_id] || 0) + 1;
             updateNotifBadge();
           }
         }
+        renderPreservingFocus();
       });
 
       socket.on('sandbox:removed', ({ id }) => {
@@ -449,6 +455,7 @@
     }
 
     let unreadCount = 0;
+    let unreadByTask = {};
     function updateNotifBadge() {
       const el = document.getElementById('notifBadge');
       if (unreadCount > 0) {
@@ -461,7 +468,13 @@
     async function loadUnreadCount() {
       try {
         const res = await fetch(API + '/notifications/unread-count', { headers: authHeaders() });
-        if (res.ok) { unreadCount = (await res.json()).count; updateNotifBadge(); }
+        if (res.ok) {
+          const data = await res.json();
+          unreadCount = data.count;
+          unreadByTask = data.by_task || {};
+          updateNotifBadge();
+          renderPreservingFocus();
+        }
       } catch (err) {}
     }
 
@@ -823,6 +836,12 @@
         delete openComments[id];
       } else {
         await loadComments(id);
+        // Гасим бейдж сразу, не дожидаясь ответа сервера — так отклик кажется мгновенным.
+        if (unreadByTask[id]) {
+          unreadCount = Math.max(0, unreadCount - unreadByTask[id]);
+          delete unreadByTask[id];
+          updateNotifBadge();
+        }
         markCommentsRead(id);
       }
       renderPreservingFocus();
@@ -950,6 +969,10 @@
       const historyLabel = openHistory[task.id] ? 'скрыть историю' : 'история';
       const commentsCount = task.comment_count || 0;
       const commentsLabel = openComments[task.id] ? 'скрыть комментарии' : `комментарии${commentsCount ? ' (' + commentsCount + ')' : ''}`;
+      const taskUnread = unreadByTask[task.id] || 0;
+      const commentsUnreadBadge = (taskUnread > 0 && !openComments[task.id])
+        ? `<span class="notif-badge-sm" title="Новых: ${taskUnread}">${taskUnread}</span>`
+        : '';
       const attCount = task.attachment_count || 0;
       const attToggle = attCount > 0
         ? `<button class="history-toggle" onclick="toggleTaskAttachments(${task.id})">${openTaskAttachments[task.id] ? 'скрыть вложения' : 'вложения (' + attCount + ')'}</button>`
@@ -973,7 +996,7 @@
             <span>Автор: ${escapeHtml(task.author_name || '—')}</span>
             ${workerBadge}
             <button class="history-toggle" onclick="toggleHistory(${task.id})">${historyLabel}</button>
-            <button class="history-toggle" onclick="toggleComments(${task.id})">${commentsLabel}</button>
+            <button class="history-toggle" onclick="toggleComments(${task.id})">${commentsLabel}</button>${commentsUnreadBadge}
             ${attToggle}
           </div>
           ${openTaskAttachments[task.id] ? attachmentThumbsHtml(openTaskAttachments[task.id]) : ''}

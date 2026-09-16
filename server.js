@@ -286,8 +286,9 @@ app.post('/api/tasks/:id/comments/read', authMiddleware, async (req, res) => {
 
 app.get('/api/notifications/unread-count', authMiddleware, async (req, res) => {
   try {
-    const count = await db.getUnreadCount(req.user.id);
-    res.json({ count });
+    const byTask = await db.getUnreadByTask(req.user.id);
+    const count = Object.values(byTask).reduce((a, b) => a + b, 0);
+    res.json({ count, by_task: byTask });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
