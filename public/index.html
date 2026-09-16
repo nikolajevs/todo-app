@@ -550,10 +550,12 @@
     async function addTask() {
       const text = taskInput.value.trim();
       if (!text) return;
+      const attachmentsPayload = pendingTaskAttachments.map(p => ({ filename: p.filename, mime_type: p.mime_type, data: p.data }));
+      const beforeIds = new Set(tasks.map(t => t.id));
       try {
         const res = await fetch(API + '/tasks', {
           method: 'POST', headers: authHeaders(),
-          body: JSON.stringify({ text, attachments: pendingTaskAttachments.map(p => ({ filename: p.filename, mime_type: p.mime_type, data: p.data })) })
+          body: JSON.stringify({ text, attachments: attachmentsPayload })
         });
         if (res.ok) {
           const task = await res.json();
@@ -562,11 +564,29 @@
           pendingTaskAttachments = [];
           renderTaskAttachPreviews();
           renderPreservingFocus();
-        } else {
-          const data = await res.json();
-          alert(data.error || 'Не удалось добавить задачу');
+          return;
         }
-      } catch (err) { alert('Failed to add task'); }
+        let serverError = null;
+        try { serverError = (await res.json()).error; } catch (e) {}
+        await reconcileTaskAfterFailedSubmit(text, beforeIds, serverError);
+      } catch (err) {
+        await reconcileTaskAfterFailedSubmit(text, beforeIds, null);
+      }
+    }
+
+    // Ответ на свой запрос мог не дойти (сеть/прокси), хотя сервер всё создал.
+    // Перед тем как пугать пользователя алертом, перепроверяем реальное состояние с сервера.
+    async function reconcileTaskAfterFailedSubmit(submittedText, beforeIds, serverError) {
+      await loadTasks();
+      const created = tasks.find(t => !beforeIds.has(t.id) && t.author_id === userId && t.text === submittedText);
+      if (created) {
+        taskInput.value = '';
+        pendingTaskAttachments = [];
+        renderTaskAttachPreviews();
+        renderPreservingFocus();
+      } else {
+        alert(serverError || 'Не удалось добавить задачу. Проверь соединение и попробуй ещё раз.');
+      }
     }
 
     function fileToBase64(file) {
@@ -751,10 +771,12 @@
       const text = el ? el.value.trim() : '';
       const pending = pendingCommentAttachments[id] || [];
       if (!text && pending.length === 0) return;
+      const attachmentsPayload = pending.map(p => ({ filename: p.filename, mime_type: p.mime_type, data: p.data }));
+      const beforeIds = new Set((openComments[id] || []).map(c => c.id));
       try {
         const res = await fetch(API + '/tasks/' + id + '/comments', {
           method: 'POST', headers: authHeaders(),
-          body: JSON.stringify({ text, attachments: pending.map(p => ({ filename: p.filename, mime_type: p.mime_type, data: p.data })) })
+          body: JSON.stringify({ text, attachments: attachmentsPayload })
         });
         if (res.ok) {
           const comment = await res.json();
@@ -762,11 +784,27 @@
           if (el) el.value = '';
           pendingCommentAttachments[id] = [];
           renderPreservingFocus();
-        } else {
-          const data = await res.json();
-          alert(data.error || 'Не удалось отправить комментарий');
+          return;
         }
-      } catch (err) {}
+        let serverError = null;
+        try { serverError = (await res.json()).error; } catch (e) {}
+        await reconcileCommentAfterFailedSubmit(id, text, beforeIds, serverError, el);
+      } catch (err) {
+        await reconcileCommentAfterFailedSubmit(id, text, beforeIds, null, el);
+      }
+    }
+
+    async function reconcileCommentAfterFailedSubmit(taskId, submittedText, beforeIds, serverError, el) {
+      await loadComments(taskId);
+      const list = openComments[taskId] || [];
+      const created = list.find(c => !beforeIds.has(c.id) && c.user_id === userId && c.text === submittedText);
+      if (created) {
+        if (el) el.value = '';
+        pendingCommentAttachments[taskId] = [];
+        renderPreservingFocus();
+      } else {
+        alert(serverError || 'Не удалось отправить комментарий. Проверь соединение и попробуй ещё раз.');
+      }
     }
 
     const ACTION_LABELS = { 'created': 'создал(а) задачу', 'status_changed': 'изменил(а) статус', 'text_edited': 'изменил(а) текст' };
