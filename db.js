@@ -5,6 +5,16 @@ const DB_PATH = path.join(__dirname, 'todo.db');
 
 let db;
 
+// Промисифицированный db.run с доступом к this.lastID/this.changes — используется
+// напрямую там, где нужна явная транзакция (BEGIN/COMMIT/ROLLBACK на одном connection).
+function run(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) {
+      if (err) reject(err); else resolve(this);
+    });
+  });
+}
+
 function initDb() {
   return new Promise((resolve, reject) => {
     db = new sqlite3.Database(DB_PATH, (err) => {
@@ -174,8 +184,13 @@ function addAttachmentRow(taskId, commentId, userId, userName, filename, mimeTyp
 async function addAttachments(taskId, commentId, userId, userName, files) {
   const saved = [];
   for (const f of (files || [])) {
-    if (!f || !f.data || !f.mime_type) continue;
+    if (!f || !f.data || !f.mime_type) {
+      throw new Error('Некорректное вложение: отсутствуют данные или тип файла');
+    }
     const buffer = Buffer.from(f.data, 'base64');
+    if (buffer.length === 0) {
+      throw new Error('Некорректное вложение: пустой файл после декодирования');
+    }
     const row = await addAttachmentRow(taskId, commentId, userId, userName, f.filename, f.mime_type, buffer);
     saved.push({ id: row.id, filename: row.filename, mime_type: row.mime_type, size: row.size, created_at: row.created_at, user_name: row.user_name });
   }
@@ -198,26 +213,27 @@ function getAttachmentData(id) {
 }
 
 async function addTask(authorId, authorName, text, source, files) {
-  return new Promise((resolve, reject) => {
-    db.run('INSERT INTO tasks (author_id, author_name, text, status, source) VALUES (?, ?, ?, ?, ?)',
-      [authorId, authorName, text, 'open', source || null],
-      function(err) {
-        if (err) reject(err);
-        else {
-          const taskId = this.lastID;
-          const histNote = source ? `${text} (${source})` : text;
-          logHistory(taskId, authorId, authorName, 'created', histNote)
-            .then(() => addAttachments(taskId, null, authorId, authorName, files))
-            .then((saved) => resolve({
-              id: taskId, author_id: authorId, author_name: authorName, text,
-              status: 'open', worker_id: null, worker_name: null, source: source || null,
-              comment_count: 0, attachment_count: saved.length,
-              created_at: new Date().toISOString()
-            }))
-            .catch(reject);
-        }
-      });
-  });
+  await run('BEGIN IMMEDIATE');
+  try {
+    const result = await run(
+      'INSERT INTO tasks (author_id, author_name, text, status, source) VALUES (?, ?, ?, ?, ?)',
+      [authorId, authorName, text, 'open', source || null]
+    );
+    const taskId = result.lastID;
+    const histNote = source ? `${text} (${source})` : text;
+    await logHistory(taskId, authorId, authorName, 'created', histNote);
+    const saved = await addAttachments(taskId, null, authorId, authorName, files);
+    await run('COMMIT');
+    return {
+      id: taskId, author_id: authorId, author_name: authorName, text,
+      status: 'open', worker_id: null, worker_name: null, source: source || null,
+      comment_count: 0, attachment_count: saved.length,
+      created_at: new Date().toISOString()
+    };
+  } catch (err) {
+    await run('ROLLBACK').catch(() => {});
+    throw err;
+  }
 }
 
 const STATUS_LABELS = { 'open': 'Открыта', 'in_progress': 'В работе', 'closed': 'Закрыта' };
@@ -312,22 +328,17 @@ function getComments(taskId) {
 async function addComment(taskId, userId, userName, text, files) {
   const task = await getTaskById(taskId);
   if (!task) throw new Error('Task not found');
-  return new Promise((resolve, reject) => {
-    db.run('INSERT INTO comments (task_id, user_id, user_name, text) VALUES (?, ?, ?, ?)',
-      [taskId, userId, userName, text],
-      function(err) {
-        if (err) reject(err);
-        else {
-          const commentId = this.lastID;
-          addAttachments(taskId, commentId, userId, userName, files)
-            .then((saved) => resolve({
-              id: commentId, task_id: taskId, user_id: userId, user_name: userName, text,
-              attachments: saved, created_at: new Date().toISOString()
-            }))
-            .catch(reject);
-        }
-      });
-  });
+  await run('BEGIN IMMEDIATE');
+  try {
+    const result = await run('INSERT INTO comments (task_id, user_id, user_name, text) VALUES (?, ?, ?, ?)', [taskId, userId, userName, text]);
+    const commentId = result.lastID;
+    const saved = await addAttachments(taskId, commentId, userId, userName, files);
+    await run('COMMIT');
+    return { id: commentId, task_id: taskId, user_id: userId, user_name: userName, text, attachments: saved, created_at: new Date().toISOString() };
+  } catch (err) {
+    await run('ROLLBACK').catch(() => {});
+    throw err;
+  }
 }
 
 function getSandboxTasks() {
