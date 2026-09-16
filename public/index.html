@@ -30,10 +30,19 @@
     .auth-switch a:hover { text-decoration: underline; }
     .error-msg { color: #f44336; font-size: 13px; margin-bottom: 1rem; min-height: 18px; }
 
-    .tabs { display: flex; gap: 4px; margin-bottom: 1.5rem; border-bottom: 1px solid #f0f0f0; }
-    .tab { padding: 0.6rem 1rem; font-size: 15px; color: #999; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all 0.2s; background: none; border-top: none; border-left: none; border-right: none; display: flex; align-items: center; gap: 8px; }
+    .tabs {
+      display: flex; gap: 2px; margin-bottom: 1.5rem; border-bottom: 1px solid #f0f0f0;
+      overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+    }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab {
+      padding: 0.6rem 0.7rem; font-size: 14px; color: #999; cursor: pointer;
+      border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all 0.2s;
+      background: none; border-top: none; border-left: none; border-right: none;
+      display: flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0;
+    }
     .tab.active { color: #333; border-bottom-color: #333; }
-    .tab-badge { background: #eee; color: #666; font-size: 12px; padding: 1px 8px; border-radius: 10px; }
+    .tab-badge { background: #eee; color: #666; font-size: 11px; padding: 1px 7px; border-radius: 10px; }
     .tab.active .tab-badge { background: #333; color: #fff; }
 
     .task-list { list-style: none; min-height: 60px; }
@@ -200,12 +209,12 @@
       </div>
 
       <div class="tabs">
-        <button class="tab active" id="tabBoard" onclick="switchTab('board')">Общая доска</button>
+        <button class="tab active" id="tabBoard" onclick="switchTab('board')">Доска</button>
         <button class="tab" id="tabArchive" onclick="switchTab('archive')">
           Архив <span class="tab-badge" id="archiveCount">0</span>
         </button>
         <button class="tab" id="tabSandbox" onclick="switchTab('sandbox')">
-          Песочница Claude <span class="tab-badge" id="sandboxCount">0</span>
+          Песочница <span class="tab-badge" id="sandboxCount">0</span>
         </button>
         <button class="tab" id="tabSettings" onclick="switchTab('settings')">Настройки</button>
       </div>
