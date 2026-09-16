@@ -201,6 +201,9 @@
 
       <div class="tabs">
         <button class="tab active" id="tabBoard" onclick="switchTab('board')">Общая доска</button>
+        <button class="tab" id="tabArchive" onclick="switchTab('archive')">
+          Архив <span class="tab-badge" id="archiveCount">0</span>
+        </button>
         <button class="tab" id="tabSandbox" onclick="switchTab('sandbox')">
           Песочница Claude <span class="tab-badge" id="sandboxCount">0</span>
         </button>
@@ -224,6 +227,11 @@
         </div>
         <ul class="task-list" id="taskList"></ul>
         <div class="stats" id="stats"></div>
+      </div>
+
+      <div id="archiveView" class="hidden">
+        <div class="sandbox-intro">Закрытые задачи автоматически уходят сюда с общей доски. Отсюда можно вернуть задачу обратно, открыв её статус заново.</div>
+        <ul class="task-list" id="archiveList"></ul>
       </div>
 
       <div id="sandboxView" class="hidden">
@@ -430,9 +438,11 @@
     function switchTab(tab) {
       currentTab = tab;
       document.getElementById('tabBoard').classList.toggle('active', tab === 'board');
+      document.getElementById('tabArchive').classList.toggle('active', tab === 'archive');
       document.getElementById('tabSandbox').classList.toggle('active', tab === 'sandbox');
       document.getElementById('tabSettings').classList.toggle('active', tab === 'settings');
       document.getElementById('boardView').classList.toggle('hidden', tab !== 'board');
+      document.getElementById('archiveView').classList.toggle('hidden', tab !== 'archive');
       document.getElementById('sandboxView').classList.toggle('hidden', tab !== 'sandbox');
       document.getElementById('settingsView').classList.toggle('hidden', tab !== 'settings');
       if (tab === 'settings') loadSettings();
@@ -874,58 +884,67 @@
       }
     }
 
-    function render() {
-      if (tasks.length === 0) {
-        taskList.innerHTML = '<div class="empty-state">No tasks. Add one or pull from Песочница Claude.</div>';
-        statsDiv.innerHTML = '';
-        return;
-      }
-      taskList.innerHTML = tasks.map(task => {
-        const workerBadge = (task.status === 'in_progress' && task.worker_name) ? `<span class="worker-badge">${escapeHtml(task.worker_name)}</span>` : '';
-        const canDelete = task.author_id === userId;
-        const deleteBtn = canDelete ? `<button class="delete-btn" onclick="deleteTask(${task.id})" title="Delete">✕</button>` : '';
-        const editBtn = canDelete ? `<button class="edit-btn" onclick="startEdit(${task.id})" title="Редактировать">✎</button>` : '';
-        const historyLabel = openHistory[task.id] ? 'скрыть историю' : 'история';
-        const commentsCount = task.comment_count || 0;
-        const commentsLabel = openComments[task.id] ? 'скрыть комментарии' : `комментарии${commentsCount ? ' (' + commentsCount + ')' : ''}`;
-        const attCount = task.attachment_count || 0;
-        const attToggle = attCount > 0
-          ? `<button class="history-toggle" onclick="toggleTaskAttachments(${task.id})">${openTaskAttachments[task.id] ? 'скрыть вложения' : 'вложения (' + attCount + ')'}</button>`
-          : '';
-        const sourceTag = task.source ? `<span class="source-tag">${escapeHtml(task.source)}</span>` : '';
+    function taskItemHtml(task) {
+      const workerBadge = (task.status === 'in_progress' && task.worker_name) ? `<span class="worker-badge">${escapeHtml(task.worker_name)}</span>` : '';
+      const canDelete = task.author_id === userId;
+      const deleteBtn = canDelete ? `<button class="delete-btn" onclick="deleteTask(${task.id})" title="Delete">✕</button>` : '';
+      const editBtn = canDelete ? `<button class="edit-btn" onclick="startEdit(${task.id})" title="Редактировать">✎</button>` : '';
+      const historyLabel = openHistory[task.id] ? 'скрыть историю' : 'история';
+      const commentsCount = task.comment_count || 0;
+      const commentsLabel = openComments[task.id] ? 'скрыть комментарии' : `комментарии${commentsCount ? ' (' + commentsCount + ')' : ''}`;
+      const attCount = task.attachment_count || 0;
+      const attToggle = attCount > 0
+        ? `<button class="history-toggle" onclick="toggleTaskAttachments(${task.id})">${openTaskAttachments[task.id] ? 'скрыть вложения' : 'вложения (' + attCount + ')'}</button>`
+        : '';
+      const sourceTag = task.source ? `<span class="source-tag">${escapeHtml(task.source)}</span>` : '';
 
-        const textBlock = editingId === task.id
-          ? `<div class="edit-box">
-               <input type="text" id="editInput-${task.id}" value="${escapeHtml(task.text)}" onkeypress="if(event.key==='Enter') saveEdit(${task.id})">
-               <button class="edit-save" onclick="saveEdit(${task.id})">Сохранить</button>
-               <button class="edit-cancel" onclick="cancelEdit()">Отмена</button>
-             </div>`
-          : `<div class="task-text ${task.status === 'closed' ? 'closed' : ''}">${escapeHtml(task.text)}${sourceTag}</div>`;
+      const textBlock = editingId === task.id
+        ? `<div class="edit-box">
+             <input type="text" id="editInput-${task.id}" value="${escapeHtml(task.text)}" onkeypress="if(event.key==='Enter') saveEdit(${task.id})">
+             <button class="edit-save" onclick="saveEdit(${task.id})">Сохранить</button>
+             <button class="edit-cancel" onclick="cancelEdit()">Отмена</button>
+           </div>`
+        : `<div class="task-text ${task.status === 'closed' ? 'closed' : ''}">${escapeHtml(task.text)}${sourceTag}</div>`;
 
-        return `
-        <li class="task-item" data-id="${task.id}">
-          <div class="status-indicator ${task.status}"></div>
-          <div class="task-content">
-            ${textBlock}
-            <div class="task-meta">
-              <span>Автор: ${escapeHtml(task.author_name || '—')}</span>
-              ${workerBadge}
-              <button class="history-toggle" onclick="toggleHistory(${task.id})">${historyLabel}</button>
-              <button class="history-toggle" onclick="toggleComments(${task.id})">${commentsLabel}</button>
-              ${attToggle}
-            </div>
-            ${openTaskAttachments[task.id] ? attachmentThumbsHtml(openTaskAttachments[task.id]) : ''}
-            <div class="status-buttons">
-              <button class="status-btn ${task.status === 'open' ? 'active open' : 'open'}" onclick="updateStatus(${task.id}, 'open')">Открыта</button>
-              <button class="status-btn ${task.status === 'in_progress' ? 'active in_progress' : 'in_progress'}" onclick="updateStatus(${task.id}, 'in_progress')">В работе</button>
-              <button class="status-btn ${task.status === 'closed' ? 'active closed' : 'closed'}" onclick="updateStatus(${task.id}, 'closed')">Закрыта</button>
-            </div>
-            ${renderHistory(task.id)}
-            ${renderComments(task.id)}
+      return `
+      <li class="task-item" data-id="${task.id}">
+        <div class="status-indicator ${task.status}"></div>
+        <div class="task-content">
+          ${textBlock}
+          <div class="task-meta">
+            <span>Автор: ${escapeHtml(task.author_name || '—')}</span>
+            ${workerBadge}
+            <button class="history-toggle" onclick="toggleHistory(${task.id})">${historyLabel}</button>
+            <button class="history-toggle" onclick="toggleComments(${task.id})">${commentsLabel}</button>
+            ${attToggle}
           </div>
-          <div class="task-actions">${editBtn}${deleteBtn}</div>
-        </li>`;
-      }).join('');
+          ${openTaskAttachments[task.id] ? attachmentThumbsHtml(openTaskAttachments[task.id]) : ''}
+          <div class="status-buttons">
+            <button class="status-btn ${task.status === 'open' ? 'active open' : 'open'}" onclick="updateStatus(${task.id}, 'open')">Открыта</button>
+            <button class="status-btn ${task.status === 'in_progress' ? 'active in_progress' : 'in_progress'}" onclick="updateStatus(${task.id}, 'in_progress')">В работе</button>
+            <button class="status-btn ${task.status === 'closed' ? 'active closed' : 'closed'}" onclick="updateStatus(${task.id}, 'closed')">Закрыта</button>
+          </div>
+          ${renderHistory(task.id)}
+          ${renderComments(task.id)}
+        </div>
+        <div class="task-actions">${editBtn}${deleteBtn}</div>
+      </li>`;
+    }
+
+    function render() {
+      const activeTasks = tasks.filter(t => t.status !== 'closed');
+      const archivedTasks = tasks.filter(t => t.status === 'closed');
+
+      taskList.innerHTML = activeTasks.length === 0
+        ? '<div class="empty-state">No tasks. Add one or pull from Песочница Claude.</div>'
+        : activeTasks.map(taskItemHtml).join('');
+
+      const archiveListEl = document.getElementById('archiveList');
+      archiveListEl.innerHTML = archivedTasks.length === 0
+        ? '<div class="empty-state">Архив пуст — сюда попадают закрытые задачи.</div>'
+        : archivedTasks.map(taskItemHtml).join('');
+
+      document.getElementById('archiveCount').textContent = archivedTasks.length;
 
       hydrateAttachmentImages();
 
