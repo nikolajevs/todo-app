@@ -13,6 +13,11 @@
     .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
     .header h1 { margin-bottom: 0; font-size: 24px; }
     .user-info { display: flex; align-items: center; gap: 12px; font-size: 14px; color: #666; }
+    .notif-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px;
+      background: #f44336; color: #fff; font-size: 12px; font-weight: 600;
+    }
     .logout-btn { background: none; border: 1px solid #ddd; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; color: #666; transition: all 0.2s; }
     .logout-btn:hover { background: #f5f5f5; color: #333; }
 
@@ -203,6 +208,7 @@
       <div class="header">
         <h1>To-do</h1>
         <div class="user-info">
+          <span class="notif-badge hidden" id="notifBadge" title="Новые комментарии">0</span>
           <span id="currentUser"></span>
           <button class="logout-btn" onclick="logout()">Logout</button>
         </div>
@@ -365,6 +371,7 @@
       token = null; username = null; userId = 0;
       localStorage.removeItem('todoToken'); localStorage.removeItem('todoUsername'); localStorage.removeItem('todoUserId');
       tasks = []; sandbox = [];
+      unreadCount = 0; updateNotifBadge();
       if (socket) { socket.disconnect(); socket = null; }
       showAuth();
     }
@@ -375,7 +382,7 @@
 
       // При (пере)подключении подтягиваем актуальное состояние —
       // это подстраховка на случай пропущенных событий, а не опрос по таймеру.
-      socket.on('connect', () => { loadTasks(); loadSandbox(); });
+      socket.on('connect', () => { loadTasks(); loadSandbox(); loadUnreadCount(); });
 
     // Единая точка добавления задачи — вызывается и из ответа на свой POST, и из
     // чужого сокет-события. Дедуп по id защищает от гонки (сокет-эхо может прийти
@@ -417,8 +424,21 @@
       });
 
       socket.on('comment:added', ({ task_id, comment }) => {
+        const wasOpen = !!openComments[task_id];
         applyComment(task_id, comment);
         renderPreservingFocus();
+
+        const notifyIds = comment.notify_user_ids || [];
+        if (comment.user_id !== userId && notifyIds.includes(userId)) {
+          if (wasOpen) {
+            // Тред уже открыт и виден живьём — сразу отмечаем прочитанным на сервере,
+            // чтобы не копился незамеченный "долг" для других сессий/вкладок этого юзера.
+            fetch(API + '/tasks/' + task_id + '/comments/read', { method: 'POST', headers: authHeaders() }).catch(() => {});
+          } else {
+            unreadCount++;
+            updateNotifBadge();
+          }
+        }
       });
 
       socket.on('sandbox:removed', ({ id }) => {
@@ -428,12 +448,30 @@
       socket.on('sandbox:changed', () => { loadSandbox(); });
     }
 
+    let unreadCount = 0;
+    function updateNotifBadge() {
+      const el = document.getElementById('notifBadge');
+      if (unreadCount > 0) {
+        el.textContent = unreadCount > 99 ? '99+' : String(unreadCount);
+        el.classList.remove('hidden');
+      } else {
+        el.classList.add('hidden');
+      }
+    }
+    async function loadUnreadCount() {
+      try {
+        const res = await fetch(API + '/notifications/unread-count', { headers: authHeaders() });
+        if (res.ok) { unreadCount = (await res.json()).count; updateNotifBadge(); }
+      } catch (err) {}
+    }
+
     function showApp() {
       authScreen.classList.add('hidden');
       appScreen.classList.remove('hidden');
       document.getElementById('currentUser').textContent = username;
       loadTasks();
       loadSandbox();
+      loadUnreadCount();
       connectSocket();
     }
 
@@ -781,9 +819,20 @@
       try { const res = await fetch(API + '/tasks/' + id + '/comments', { headers: authHeaders() }); if (res.ok) openComments[id] = await res.json(); } catch (err) {}
     }
     async function toggleComments(id) {
-      if (openComments[id]) delete openComments[id];
-      else await loadComments(id);
+      if (openComments[id]) {
+        delete openComments[id];
+      } else {
+        await loadComments(id);
+        markCommentsRead(id);
+      }
       renderPreservingFocus();
+    }
+
+    async function markCommentsRead(id) {
+      try {
+        await fetch(API + '/tasks/' + id + '/comments/read', { method: 'POST', headers: authHeaders() });
+        await loadUnreadCount();
+      } catch (err) {}
     }
     async function submitComment(id) {
       const el = document.getElementById('commentInput-' + id);

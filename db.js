@@ -15,6 +15,18 @@ function run(sql, params = []) {
   });
 }
 
+function get(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => { if (err) reject(err); else resolve(row); });
+  });
+}
+
+function all(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => { if (err) reject(err); else resolve(rows || []); });
+  });
+}
+
 function initDb() {
   return new Promise((resolve, reject) => {
     db = new sqlite3.Database(DB_PATH, (err) => {
@@ -109,7 +121,16 @@ function initDb() {
           )
         `);
 
-        db.run('CREATE INDEX IF NOT EXISTS idx_attachments_task ON attachments(task_id)', (err) => {
+        db.run('CREATE INDEX IF NOT EXISTS idx_attachments_task ON attachments(task_id)');
+
+        db.run(`
+          CREATE TABLE IF NOT EXISTS comment_reads (
+            user_id INTEGER NOT NULL,
+            task_id INTEGER NOT NULL,
+            last_read_comment_id INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, task_id)
+          )
+        `, (err) => {
           if (err) reject(err);
           else resolve(db);
         });
@@ -223,6 +244,14 @@ async function addTask(authorId, authorName, text, source, files) {
     const histNote = source ? `${text} (${source})` : text;
     await logHistory(taskId, authorId, authorName, 'created', histNote);
     const saved = await addAttachments(taskId, null, authorId, authorName, files);
+    // Автор с нуля считается «прочитавшим» пустую тему — это не даёт бутстрапу
+    // в getUnreadCount() задним числом посчитать первый же будущий комментарий
+    // как уже прочитанный (бутстрап нужен только для старых, дофичевых задач).
+    await run(
+      `INSERT INTO comment_reads (user_id, task_id, last_read_comment_id) VALUES (?, ?, 0)
+       ON CONFLICT(user_id, task_id) DO NOTHING`,
+      [authorId, taskId]
+    );
     await run('COMMIT');
     return {
       id: taskId, author_id: authorId, author_name: authorName, text,
@@ -325,16 +354,73 @@ function getComments(taskId) {
   });
 }
 
+async function getInterestedUserIds(taskId, excludeUserId) {
+  const task = await getTaskById(taskId);
+  const rows = await all('SELECT DISTINCT user_id FROM comments WHERE task_id = ?', [taskId]);
+  const ids = new Set(rows.map(r => r.user_id));
+  if (task) ids.add(task.author_id);
+  if (excludeUserId != null) ids.delete(excludeUserId);
+  return Array.from(ids);
+}
+
+async function markCommentRead(userId, taskId) {
+  const row = await get('SELECT MAX(id) AS maxId FROM comments WHERE task_id = ?', [taskId]);
+  const maxId = (row && row.maxId) || 0;
+  await run(
+    `INSERT INTO comment_reads (user_id, task_id, last_read_comment_id) VALUES (?, ?, ?)
+     ON CONFLICT(user_id, task_id) DO UPDATE SET last_read_comment_id = MAX(last_read_comment_id, excluded.last_read_comment_id)`,
+    [userId, taskId, maxId]
+  );
+  return { task_id: taskId, last_read_comment_id: maxId };
+}
+
+async function getUnreadCount(userId) {
+  const candidates = await all(`
+    SELECT id AS task_id FROM tasks WHERE author_id = ?
+    UNION
+    SELECT DISTINCT task_id FROM comments WHERE user_id = ?
+  `, [userId, userId]);
+
+  if (candidates.length === 0) return 0;
+
+  // Бутстрап: если для задачи ещё нет отметки прочитанного у этого юзера — считаем
+  // прочитанным всё, что уже накопилось (чтобы не обрушить старый backlog как «непрочитанное»
+  // при первом включении фичи или при первом появлении юзера в теме).
+  for (const c of candidates) {
+    const existing = await get('SELECT 1 FROM comment_reads WHERE user_id = ? AND task_id = ?', [userId, c.task_id]);
+    if (!existing) {
+      const row = await get('SELECT MAX(id) AS maxId FROM comments WHERE task_id = ?', [c.task_id]);
+      const maxId = (row && row.maxId) || 0;
+      await run('INSERT INTO comment_reads (user_id, task_id, last_read_comment_id) VALUES (?, ?, ?)', [userId, c.task_id, maxId]);
+    }
+  }
+
+  let total = 0;
+  for (const c of candidates) {
+    const readRow = await get('SELECT last_read_comment_id FROM comment_reads WHERE user_id = ? AND task_id = ?', [userId, c.task_id]);
+    const lastRead = readRow ? readRow.last_read_comment_id : 0;
+    const countRow = await get('SELECT COUNT(*) AS cnt FROM comments WHERE task_id = ? AND id > ? AND user_id != ?', [c.task_id, lastRead, userId]);
+    total += countRow.cnt;
+  }
+  return total;
+}
+
 async function addComment(taskId, userId, userName, text, files) {
   const task = await getTaskById(taskId);
   if (!task) throw new Error('Task not found');
+  const notifyUserIds = await getInterestedUserIds(taskId, userId);
   await run('BEGIN IMMEDIATE');
   try {
     const result = await run('INSERT INTO comments (task_id, user_id, user_name, text) VALUES (?, ?, ?, ?)', [taskId, userId, userName, text]);
     const commentId = result.lastID;
     const saved = await addAttachments(taskId, commentId, userId, userName, files);
+    await run(
+      `INSERT INTO comment_reads (user_id, task_id, last_read_comment_id) VALUES (?, ?, ?)
+       ON CONFLICT(user_id, task_id) DO UPDATE SET last_read_comment_id = MAX(last_read_comment_id, excluded.last_read_comment_id)`,
+      [userId, taskId, commentId]
+    );
     await run('COMMIT');
-    return { id: commentId, task_id: taskId, user_id: userId, user_name: userName, text, attachments: saved, created_at: new Date().toISOString() };
+    return { id: commentId, task_id: taskId, user_id: userId, user_name: userName, text, attachments: saved, notify_user_ids: notifyUserIds, created_at: new Date().toISOString() };
   } catch (err) {
     await run('ROLLBACK').catch(() => {});
     throw err;
@@ -416,6 +502,7 @@ module.exports = {
   getAllTasks, getTaskById, addTask, updateTaskStatus, deleteTask, getTaskHistory,
   editTaskText, getComments, addComment,
   getTaskAttachments, getAttachmentData,
+  markCommentRead, getUnreadCount, getInterestedUserIds,
   getSandboxTasks, getSandboxById, addSandboxTask, markSandboxStatus, promoteSandboxTask, countSandbox,
   getSetting, setSetting
 };

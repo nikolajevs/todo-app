@@ -274,6 +274,25 @@ app.post('/api/tasks/:id/comments', authMiddleware, async (req, res) => {
   }
 });
 
+app.post('/api/tasks/:id/comments/read', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.markCommentRead(req.user.id, id);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/notifications/unread-count', authMiddleware, async (req, res) => {
+  try {
+    const count = await db.getUnreadCount(req.user.id);
+    res.json({ count });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/tasks/:id/attachments', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
