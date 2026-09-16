@@ -82,7 +82,24 @@ function initDb() {
           )
         `);
 
-        db.run('CREATE INDEX IF NOT EXISTS idx_comments_task ON comments(task_id)', (err) => {
+        db.run('CREATE INDEX IF NOT EXISTS idx_comments_task ON comments(task_id)');
+
+        db.run(`
+          CREATE TABLE IF NOT EXISTS attachments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            comment_id INTEGER,
+            user_id INTEGER NOT NULL,
+            user_name TEXT NOT NULL,
+            filename TEXT,
+            mime_type TEXT NOT NULL,
+            size INTEGER,
+            data BLOB NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          )
+        `);
+
+        db.run('CREATE INDEX IF NOT EXISTS idx_attachments_task ON attachments(task_id)', (err) => {
           if (err) reject(err);
           else resolve(db);
         });
@@ -133,7 +150,9 @@ function getTaskById(id) {
 function getAllTasks() {
   return new Promise((resolve, reject) => {
     db.all(`
-      SELECT t.*, (SELECT COUNT(*) FROM comments c WHERE c.task_id = t.id) AS comment_count
+      SELECT t.*,
+        (SELECT COUNT(*) FROM comments c WHERE c.task_id = t.id) AS comment_count,
+        (SELECT COUNT(*) FROM attachments a WHERE a.task_id = t.id AND a.comment_id IS NULL) AS attachment_count
       FROM tasks t ORDER BY t.id DESC
     `, (err, rows) => {
       if (err) reject(err); else resolve(rows || []);
@@ -141,7 +160,44 @@ function getAllTasks() {
   });
 }
 
-async function addTask(authorId, authorName, text, source) {
+function addAttachmentRow(taskId, commentId, userId, userName, filename, mimeType, buffer) {
+  return new Promise((resolve, reject) => {
+    db.run('INSERT INTO attachments (task_id, comment_id, user_id, user_name, filename, mime_type, size, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [taskId, commentId, userId, userName, filename || null, mimeType, buffer.length, buffer],
+      function(err) {
+        if (err) reject(err);
+        else resolve({ id: this.lastID, task_id: taskId, comment_id: commentId, user_id: userId, user_name: userName, filename: filename || null, mime_type: mimeType, size: buffer.length, created_at: new Date().toISOString() });
+      });
+  });
+}
+
+async function addAttachments(taskId, commentId, userId, userName, files) {
+  const saved = [];
+  for (const f of (files || [])) {
+    if (!f || !f.data || !f.mime_type) continue;
+    const buffer = Buffer.from(f.data, 'base64');
+    const row = await addAttachmentRow(taskId, commentId, userId, userName, f.filename, f.mime_type, buffer);
+    saved.push({ id: row.id, filename: row.filename, mime_type: row.mime_type, size: row.size, created_at: row.created_at, user_name: row.user_name });
+  }
+  return saved;
+}
+
+function getTaskAttachments(taskId) {
+  return new Promise((resolve, reject) => {
+    db.all('SELECT id, comment_id, user_name, filename, mime_type, size, created_at FROM attachments WHERE task_id = ? AND comment_id IS NULL ORDER BY id ASC',
+      [taskId], (err, rows) => { if (err) reject(err); else resolve(rows || []); });
+  });
+}
+
+function getAttachmentData(id) {
+  return new Promise((resolve, reject) => {
+    db.get('SELECT mime_type, data FROM attachments WHERE id = ?', [id], (err, row) => {
+      if (err) reject(err); else resolve(row || null);
+    });
+  });
+}
+
+async function addTask(authorId, authorName, text, source, files) {
   return new Promise((resolve, reject) => {
     db.run('INSERT INTO tasks (author_id, author_name, text, status, source) VALUES (?, ?, ?, ?, ?)',
       [authorId, authorName, text, 'open', source || null],
@@ -151,9 +207,11 @@ async function addTask(authorId, authorName, text, source) {
           const taskId = this.lastID;
           const histNote = source ? `${text} (${source})` : text;
           logHistory(taskId, authorId, authorName, 'created', histNote)
-            .then(() => resolve({
+            .then(() => addAttachments(taskId, null, authorId, authorName, files))
+            .then((saved) => resolve({
               id: taskId, author_id: authorId, author_name: authorName, text,
               status: 'open', worker_id: null, worker_name: null, source: source || null,
+              comment_count: 0, attachment_count: saved.length,
               created_at: new Date().toISOString()
             }))
             .catch(reject);
@@ -231,11 +289,27 @@ async function editTaskText(userId, userName, id, newText) {
 function getComments(taskId) {
   return new Promise((resolve, reject) => {
     db.all('SELECT * FROM comments WHERE task_id = ? ORDER BY id ASC', [taskId],
-      (err, rows) => { if (err) reject(err); else resolve(rows || []); });
+      async (err, rows) => {
+        if (err) { reject(err); return; }
+        const comments = rows || [];
+        if (comments.length === 0) { resolve(comments); return; }
+        const ids = comments.map(c => c.id);
+        db.all(`SELECT id, comment_id, user_name, filename, mime_type, size, created_at FROM attachments WHERE comment_id IN (${ids.map(() => '?').join(',')})`, ids,
+          (err2, atts) => {
+            if (err2) { reject(err2); return; }
+            const byComment = {};
+            for (const a of (atts || [])) {
+              if (!byComment[a.comment_id]) byComment[a.comment_id] = [];
+              byComment[a.comment_id].push(a);
+            }
+            comments.forEach(c => { c.attachments = byComment[c.id] || []; });
+            resolve(comments);
+          });
+      });
   });
 }
 
-async function addComment(taskId, userId, userName, text) {
+async function addComment(taskId, userId, userName, text, files) {
   const task = await getTaskById(taskId);
   if (!task) throw new Error('Task not found');
   return new Promise((resolve, reject) => {
@@ -243,7 +317,15 @@ async function addComment(taskId, userId, userName, text) {
       [taskId, userId, userName, text],
       function(err) {
         if (err) reject(err);
-        else resolve({ id: this.lastID, task_id: taskId, user_id: userId, user_name: userName, text, created_at: new Date().toISOString() });
+        else {
+          const commentId = this.lastID;
+          addAttachments(taskId, commentId, userId, userName, files)
+            .then((saved) => resolve({
+              id: commentId, task_id: taskId, user_id: userId, user_name: userName, text,
+              attachments: saved, created_at: new Date().toISOString()
+            }))
+            .catch(reject);
+        }
       });
   });
 }
@@ -322,6 +404,7 @@ module.exports = {
   initDb, createUser, findUserByUsername,
   getAllTasks, getTaskById, addTask, updateTaskStatus, deleteTask, getTaskHistory,
   editTaskText, getComments, addComment,
+  getTaskAttachments, getAttachmentData,
   getSandboxTasks, getSandboxById, addSandboxTask, markSandboxStatus, promoteSandboxTask, countSandbox,
   getSetting, setSetting
 };

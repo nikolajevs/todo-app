@@ -16,7 +16,7 @@ const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'change-this-secret-in-production';
 
 app.use(cors());
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: '20mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const httpServer = http.createServer(app);
@@ -159,17 +159,30 @@ app.get('/api/tasks', authMiddleware, async (req, res) => {
   }
 });
 
+function validateAttachments(files) {
+  if (!files) return [];
+  if (!Array.isArray(files)) throw new Error('attachments must be an array');
+  if (files.length > 5) throw new Error('Максимум 5 вложений за раз');
+  for (const f of files) {
+    if (!f.mime_type || !f.mime_type.startsWith('image/')) throw new Error('Можно прикреплять только изображения');
+    if (!f.data || typeof f.data !== 'string') throw new Error('Некорректные данные вложения');
+    if (f.data.length > 12 * 1024 * 1024) throw new Error('Файл слишком большой (макс. ~8 МБ)');
+  }
+  return files;
+}
+
 app.post('/api/tasks', authMiddleware, async (req, res) => {
   try {
-    const { text } = req.body;
+    const { text, attachments } = req.body;
     if (!text || !text.trim()) {
       return res.status(400).json({ error: 'Task text is required' });
     }
-    const task = await db.addTask(req.user.id, req.user.username, text.trim());
+    const files = validateAttachments(attachments);
+    const task = await db.addTask(req.user.id, req.user.username, text.trim(), undefined, files);
     broadcast('task:created', task);
     res.json(task);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(400).json({ error: err.message });
   }
 });
 
@@ -244,17 +257,42 @@ app.get('/api/tasks/:id/comments', authMiddleware, async (req, res) => {
 app.post('/api/tasks/:id/comments', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
-    const { text } = req.body;
-    if (!text || !text.trim()) {
-      return res.status(400).json({ error: 'Comment text is required' });
+    const { text, attachments } = req.body;
+    const files = validateAttachments(attachments);
+    const trimmed = (text || '').trim();
+    if (!trimmed && files.length === 0) {
+      return res.status(400).json({ error: 'Нужен текст или хотя бы одно вложение' });
     }
-    const comment = await db.addComment(id, req.user.id, req.user.username, text.trim());
+    const comment = await db.addComment(id, req.user.id, req.user.username, trimmed, files);
     broadcast('comment:added', { task_id: Number(id), comment });
     res.json(comment);
   } catch (err) {
     if (err.message === 'Task not found') {
       return res.status(404).json({ error: 'Task not found' });
     }
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/tasks/:id/attachments', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const items = await db.getTaskAttachments(id);
+    res.json(items);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/attachments/:id', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const att = await db.getAttachmentData(id);
+    if (!att) return res.status(404).json({ error: 'Not found' });
+    res.set('Content-Type', att.mime_type);
+    res.set('Cache-Control', 'private, max-age=31536000, immutable');
+    res.send(att.data);
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

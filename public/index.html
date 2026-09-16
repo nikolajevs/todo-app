@@ -89,8 +89,44 @@
     .comment-user { color: #333; font-weight: 500; }
     .comment-time { color: #aaa; font-size: 11px; margin-left: 6px; }
     .comment-text { margin-top: 2px; color: #444; word-break: break-word; }
-    .comment-form { display: flex; gap: 8px; margin-top: 0.5rem; }
+    .comment-form { display: flex; gap: 8px; margin-top: 0.5rem; align-items: flex-end; }
     .comment-form input { flex: 1; border: 1px solid #ddd; border-radius: 4px; padding: 6px 8px; font-size: 13px; }
+
+    .composer { margin-bottom: 1.5rem; }
+    .composer-box { border: 1px solid #e0e0e0; border-radius: 10px; padding: 0.5rem 0.75rem; transition: border-color 0.2s; }
+    .composer-box:focus-within { border-color: #999; }
+    textarea#taskInput {
+      width: 100%; min-height: 90px; resize: vertical; border: none; outline: none;
+      font-size: 15px; font-family: inherit; padding: 0.5rem 0; background: transparent; color: #333;
+    }
+    textarea#taskInput::placeholder { color: #ccc; }
+    .composer-toolbar { display: flex; justify-content: space-between; align-items: center; margin-top: 0.25rem; }
+    .attach-btn { background: none; border: none; cursor: pointer; font-size: 18px; color: #999; padding: 4px 6px; border-radius: 4px; transition: all 0.2s; }
+    .attach-btn:hover { background: #f5f5f5; color: #555; }
+    .composer-hint { font-size: 11px; color: #bbb; }
+    .add-task-btn { padding: 6px 16px; font-size: 13px; background: #333; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+    .add-task-btn:hover { background: #555; }
+
+    .attach-previews { display: flex; gap: 8px; flex-wrap: wrap; margin: 0.5rem 0; }
+    .attach-preview { position: relative; width: 56px; height: 56px; border-radius: 6px; overflow: hidden; border: 1px solid #eee; }
+    .attach-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .attach-remove { position: absolute; top: 0; right: 0; background: rgba(0,0,0,0.6); color: #fff; border: none; width: 18px; height: 18px; font-size: 11px; cursor: pointer; line-height: 1; border-radius: 0 0 0 6px; }
+
+    .attach-btn-comment { background: none; border: none; cursor: pointer; font-size: 16px; color: #999; padding: 4px 6px; flex-shrink: 0; }
+    .attach-btn-comment:hover { color: #555; }
+
+    .attachment-thumbs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+    .attachment-thumb { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; border: 1px solid #eee; cursor: pointer; background: #f5f5f5; transition: opacity 0.2s; }
+    .attachment-thumb:hover { opacity: 0.85; }
+
+    .task-attach-badge { background: none; border: none; color: #999; font-size: 12px; cursor: pointer; text-decoration: underline; text-decoration-color: #ddd; padding: 0; }
+
+    .lightbox-overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 1000;
+      align-items: center; justify-content: center; cursor: zoom-out; padding: 2rem;
+    }
+    .lightbox-overlay.open { display: flex; }
+    .lightbox-overlay img { max-width: 100%; max-height: 100%; border-radius: 4px; }
     .comment-send { padding: 4px 12px; font-size: 12px; background: #333; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
     .no-comments { color: #999; font-size: 12px; padding: 4px 0; }
     .delete-btn { background: none; border: none; cursor: pointer; font-size: 16px; color: #ccc; padding: 4px 8px; transition: color 0.2s; }
@@ -172,8 +208,19 @@
       </div>
 
       <div id="boardView">
-        <div class="input-wrapper">
-          <input type="text" id="taskInput" placeholder="Add a task..." autocomplete="off">
+        <div class="input-wrapper composer">
+          <div class="composer-box">
+            <textarea id="taskInput" placeholder="Add a task... (можно вставить скриншот через Ctrl+V)" onpaste="onTaskPaste(event)" onkeydown="if((event.ctrlKey||event.metaKey) && event.key==='Enter') addTask()"></textarea>
+            <div id="taskAttachPreviews" class="attach-previews"></div>
+            <div class="composer-toolbar">
+              <div>
+                <button class="attach-btn" onclick="document.getElementById('taskFileInput').click()" title="Прикрепить изображение">📎</button>
+                <input type="file" id="taskFileInput" accept="image/*" multiple style="display:none" onchange="onFilePicked(event, 'task')">
+                <span class="composer-hint">Ctrl+Enter — добавить</span>
+              </div>
+              <button class="add-task-btn" onclick="addTask()">Добавить</button>
+            </div>
+          </div>
         </div>
         <ul class="task-list" id="taskList"></ul>
         <div class="stats" id="stats"></div>
@@ -227,6 +274,10 @@
 
   </div>
 
+  <div class="lightbox-overlay" id="lightboxOverlay" onclick="closeLightbox()">
+    <img id="lightboxImg" src="" alt="">
+  </div>
+
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const API = '/api';
@@ -238,6 +289,10 @@
     let sandbox = [];
     let socket = null;
     let openHistory = {};
+    let openTaskAttachments = {};
+    const attachmentBlobUrls = {};
+    let pendingTaskAttachments = [];
+    let pendingCommentAttachments = {};
     let currentTab = 'board';
 
     const authScreen = document.getElementById('authScreen');
@@ -496,9 +551,135 @@
       const text = taskInput.value.trim();
       if (!text) return;
       try {
-        const res = await fetch(API + '/tasks', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ text }) });
-        if (res.ok) { const task = await res.json(); upsertTask(task); taskInput.value = ''; renderPreservingFocus(); }
+        const res = await fetch(API + '/tasks', {
+          method: 'POST', headers: authHeaders(),
+          body: JSON.stringify({ text, attachments: pendingTaskAttachments.map(p => ({ filename: p.filename, mime_type: p.mime_type, data: p.data })) })
+        });
+        if (res.ok) {
+          const task = await res.json();
+          upsertTask(task);
+          taskInput.value = '';
+          pendingTaskAttachments = [];
+          renderTaskAttachPreviews();
+          renderPreservingFocus();
+        } else {
+          const data = await res.json();
+          alert(data.error || 'Не удалось добавить задачу');
+        }
       } catch (err) { alert('Failed to add task'); }
+    }
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function addImageFile(file, kind, taskId) {
+      if (!file.type.startsWith('image/')) return;
+      if (file.size > 8 * 1024 * 1024) { alert('Файл слишком большой (макс. 8 МБ)'); return; }
+      const base64 = await fileToBase64(file);
+      const item = { filename: file.name, mime_type: file.type, data: base64, dataUrl: 'data:' + file.type + ';base64,' + base64 };
+      if (kind === 'task') {
+        pendingTaskAttachments.push(item);
+        renderTaskAttachPreviews();
+      } else {
+        if (!pendingCommentAttachments[taskId]) pendingCommentAttachments[taskId] = [];
+        pendingCommentAttachments[taskId].push(item);
+        renderPreservingFocus();
+      }
+    }
+
+    function onFilePicked(event, kind, taskId) {
+      const files = Array.from(event.target.files || []);
+      files.forEach(f => addImageFile(f, kind, taskId));
+      event.target.value = '';
+    }
+
+    function onTaskPaste(event) {
+      const items = Array.from(event.clipboardData ? event.clipboardData.items : []);
+      const imageItem = items.find(i => i.type.startsWith('image/'));
+      if (!imageItem) return;
+      event.preventDefault();
+      addImageFile(imageItem.getAsFile(), 'task');
+    }
+
+    function onCommentPaste(event, taskId) {
+      const items = Array.from(event.clipboardData ? event.clipboardData.items : []);
+      const imageItem = items.find(i => i.type.startsWith('image/'));
+      if (!imageItem) return;
+      event.preventDefault();
+      addImageFile(imageItem.getAsFile(), 'comment', taskId);
+    }
+
+    function renderTaskAttachPreviews() {
+      const el = document.getElementById('taskAttachPreviews');
+      if (!el) return;
+      el.innerHTML = pendingTaskAttachments.map((p, i) =>
+        `<div class="attach-preview"><img src="${p.dataUrl}"><button class="attach-remove" onclick="removeTaskAttachment(${i})">✕</button></div>`
+      ).join('');
+    }
+
+    function removeTaskAttachment(i) {
+      pendingTaskAttachments.splice(i, 1);
+      renderTaskAttachPreviews();
+    }
+
+    function removeCommentAttachment(taskId, i) {
+      if (pendingCommentAttachments[taskId]) pendingCommentAttachments[taskId].splice(i, 1);
+      renderPreservingFocus();
+    }
+
+    function hydrateAttachmentImages() {
+      document.querySelectorAll('img.attachment-thumb').forEach(img => {
+        const id = img.getAttribute('data-attachment-id');
+        if (attachmentBlobUrls[id]) {
+          if (img.src !== attachmentBlobUrls[id]) img.src = attachmentBlobUrls[id];
+          return;
+        }
+        fetch(API + '/attachments/' + id, { headers: authHeaders() })
+          .then(res => res.ok ? res.blob() : null)
+          .then(blob => {
+            if (!blob) return;
+            const url = URL.createObjectURL(blob);
+            attachmentBlobUrls[id] = url;
+            img.src = url;
+          })
+          .catch(() => {});
+      });
+    }
+
+    function openLightbox(id) {
+      const overlay = document.getElementById('lightboxOverlay');
+      const img = document.getElementById('lightboxImg');
+      const cached = attachmentBlobUrls[id];
+      if (cached) {
+        img.src = cached;
+      } else {
+        fetch(API + '/attachments/' + id, { headers: authHeaders() })
+          .then(res => res.ok ? res.blob() : null)
+          .then(blob => { if (blob) { const url = URL.createObjectURL(blob); attachmentBlobUrls[id] = url; img.src = url; } });
+      }
+      overlay.classList.add('open');
+    }
+
+    function closeLightbox() {
+      document.getElementById('lightboxOverlay').classList.remove('open');
+    }
+
+    async function loadTaskAttachments(id) {
+      try {
+        const res = await fetch(API + '/tasks/' + id + '/attachments', { headers: authHeaders() });
+        if (res.ok) openTaskAttachments[id] = await res.json();
+      } catch (err) {}
+    }
+    async function toggleTaskAttachments(id) {
+      if (openTaskAttachments[id]) delete openTaskAttachments[id];
+      else await loadTaskAttachments(id);
+      renderPreservingFocus();
     }
 
     async function updateStatus(id, newStatus) {
@@ -568,13 +749,22 @@
     async function submitComment(id) {
       const el = document.getElementById('commentInput-' + id);
       const text = el ? el.value.trim() : '';
-      if (!text) return;
+      const pending = pendingCommentAttachments[id] || [];
+      if (!text && pending.length === 0) return;
       try {
-        const res = await fetch(API + '/tasks/' + id + '/comments', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ text }) });
+        const res = await fetch(API + '/tasks/' + id + '/comments', {
+          method: 'POST', headers: authHeaders(),
+          body: JSON.stringify({ text, attachments: pending.map(p => ({ filename: p.filename, mime_type: p.mime_type, data: p.data })) })
+        });
         if (res.ok) {
           const comment = await res.json();
           applyComment(id, comment);
+          if (el) el.value = '';
+          pendingCommentAttachments[id] = [];
           renderPreservingFocus();
+        } else {
+          const data = await res.json();
+          alert(data.error || 'Не удалось отправить комментарий');
         }
       } catch (err) {}
     }
@@ -592,6 +782,13 @@
         <div class="history-entry"><span class="history-user">${escapeHtml(e.user_name)}</span> ${ACTION_LABELS[e.action] || e.action}${e.details ? ': ' + escapeHtml(e.details) : ''} <span class="history-time">— ${formatTime(e.created_at)}</span></div>`).join('') + '</div>';
     }
 
+    function attachmentThumbsHtml(list) {
+      if (!list || list.length === 0) return '';
+      return '<div class="attachment-thumbs">' + list.map(a =>
+        `<img class="attachment-thumb" data-attachment-id="${a.id}" onclick="openLightbox(${a.id})" alt="${escapeHtml(a.filename || 'screenshot')}">`
+      ).join('') + '</div>';
+    }
+
     function renderComments(id) {
       const list = openComments[id];
       if (!list) return '';
@@ -600,12 +797,20 @@
         : list.map(c => `
           <div class="comment-entry">
             <span class="comment-user">${escapeHtml(c.user_name)}</span><span class="comment-time">${formatTime(c.created_at)}</span>
-            <div class="comment-text">${escapeHtml(c.text)}</div>
+            ${c.text ? `<div class="comment-text">${escapeHtml(c.text)}</div>` : ''}
+            ${attachmentThumbsHtml(c.attachments)}
           </div>`).join('');
+      const pending = pendingCommentAttachments[id] || [];
+      const previews = pending.length ? '<div class="attach-previews">' + pending.map((p, i) =>
+        `<div class="attach-preview"><img src="${p.dataUrl}"><button class="attach-remove" onclick="removeCommentAttachment(${id}, ${i})">✕</button></div>`
+      ).join('') + '</div>' : '';
       return `<div class="comments-box">
         ${items}
+        ${previews}
         <div class="comment-form">
-          <input type="text" id="commentInput-${id}" placeholder="Написать комментарий..." onkeypress="if(event.key==='Enter') submitComment(${id})">
+          <button class="attach-btn-comment" onclick="document.getElementById('commentFileInput-${id}').click()" title="Прикрепить изображение">📎</button>
+          <input type="file" id="commentFileInput-${id}" accept="image/*" multiple style="display:none" onchange="onFilePicked(event, 'comment', ${id})">
+          <input type="text" id="commentInput-${id}" placeholder="Написать комментарий..." onkeypress="if(event.key==='Enter') submitComment(${id})" onpaste="onCommentPaste(event, ${id})">
           <button class="comment-send" onclick="submitComment(${id})">Отправить</button>
         </div>
       </div>`;
@@ -645,6 +850,10 @@
         const historyLabel = openHistory[task.id] ? 'скрыть историю' : 'история';
         const commentsCount = task.comment_count || 0;
         const commentsLabel = openComments[task.id] ? 'скрыть комментарии' : `комментарии${commentsCount ? ' (' + commentsCount + ')' : ''}`;
+        const attCount = task.attachment_count || 0;
+        const attToggle = attCount > 0
+          ? `<button class="history-toggle" onclick="toggleTaskAttachments(${task.id})">${openTaskAttachments[task.id] ? 'скрыть вложения' : 'вложения (' + attCount + ')'}</button>`
+          : '';
         const sourceTag = task.source ? `<span class="source-tag">${escapeHtml(task.source)}</span>` : '';
 
         const textBlock = editingId === task.id
@@ -665,7 +874,9 @@
               ${workerBadge}
               <button class="history-toggle" onclick="toggleHistory(${task.id})">${historyLabel}</button>
               <button class="history-toggle" onclick="toggleComments(${task.id})">${commentsLabel}</button>
+              ${attToggle}
             </div>
+            ${openTaskAttachments[task.id] ? attachmentThumbsHtml(openTaskAttachments[task.id]) : ''}
             <div class="status-buttons">
               <button class="status-btn ${task.status === 'open' ? 'active open' : 'open'}" onclick="updateStatus(${task.id}, 'open')">Открыта</button>
               <button class="status-btn ${task.status === 'in_progress' ? 'active in_progress' : 'in_progress'}" onclick="updateStatus(${task.id}, 'in_progress')">В работе</button>
@@ -677,6 +888,8 @@
           <div class="task-actions">${editBtn}${deleteBtn}</div>
         </li>`;
       }).join('');
+
+      hydrateAttachmentImages();
 
       const open = tasks.filter(t => t.status === 'open').length;
       const inProgress = tasks.filter(t => t.status === 'in_progress').length;
@@ -751,7 +964,7 @@
       return String(text).replace(/[&<>"']/g, m => map[m]);
     }
 
-    taskInput.addEventListener('keypress', e => { if (e.key === 'Enter') addTask(); });
+    // Enter в textarea теперь просто переносит строку; отправка — через Ctrl+Enter (см. onkeydown в разметке) или кнопку.
     document.getElementById('authPassword').addEventListener('keypress', e => { if (e.key === 'Enter') submitAuth(); });
 
     if (token && username) { showApp(); } else { showAuth(); }
